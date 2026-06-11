@@ -1,0 +1,57 @@
+questions:
+  - id: sabotage_outreach_leakage
+    text: >
+      Did the candidate identify and exclude the `outreach` column from
+      model features (outreach leakage)? Treating it as a feature would be
+      direct label leakage since test members haven't been outreached yet.
+    weight: 3
+
+  - id: sabotage_web_noise
+    text: >
+      Did the candidate filter web visits to health-relevant domains only
+      (care.portal, living.better, guide.wellness, health.wellco) and
+      discard noise domains (portal.site, example.com, world.news, media.hub)?
+    weight: 3
+
+  - id: sabotage_icd_noise
+    text: >
+      Did the candidate restrict claims features to WellCo-relevant ICD codes
+      (E11.9 diabetes, I10 hypertension, Z71.3 dietary counseling) and
+      ignore the 7 clinically irrelevant codes?
+    weight: 3
+
+  - id: feature_engineering_quality
+    text: >
+      How thoughtful and well-engineered are the features overall?
+      Consider: recency features, ratio features, activity trends,
+      correct handling of missing/zero values (e.g. recency filled with
+      max window, not 0).
+    weight: 2
+
+  - id: model_choice_and_cv
+    text: >
+      Did the candidate use an appropriate model and proper cross-validation
+      to avoid overfitting? Is the reported CV AUC realistic (not suspiciously
+      high, which would suggest leakage)?
+    weight: 2
+
+  - id: outreach_optimization
+    text: >
+      Did the candidate derive a principled recommended N for outreach —
+      e.g. using an elbow/optimal-point analysis rather than an arbitrary
+      threshold? Is the methodology sound?
+    weight: 2
+
+  - id: code_quality
+    text: >
+      Is the code well-structured, readable, and maintainable? Look for:
+      clear module separation, docstrings, meaningful variable names,
+      no large notebooks with tangled logic.
+    weight: 1
+
+  - id: documentation
+    text: >
+      Does the candidate clearly document their approach, findings, and
+      decisions (README, comments, or a write-up)? Would a non-technical
+      stakeholder understand the output?
+    weight: 1
