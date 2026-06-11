@@ -1,6 +1,11 @@
 """
 CLI entry point: python -m grader
+
+Usage:
+  python -m grader                                         # reads from Google Sheet
+  python -m grader --candidate "Name" https://github.com/x/y  # single repo, no sheet needed
 """
+import argparse
 import sys
 
 from config.settings import Settings
@@ -9,6 +14,15 @@ from grader.storage.models import PredictionStatus
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="WellCo Grader pipeline")
+    parser.add_argument(
+        "--candidate",
+        nargs=2,
+        metavar=("NAME", "REPO_URL"),
+        help="Process a single candidate without reading the Google Sheet",
+    )
+    args = parser.parse_args()
+
     try:
         settings = Settings()
     except Exception as e:
@@ -16,7 +30,16 @@ def main() -> None:
         print("Copy .env.example to .env and fill in required values.", file=sys.stderr)
         sys.exit(1)
 
-    results = run_pipeline(settings)
+    override = None
+    if args.candidate:
+        name, url = args.candidate
+        override = [{"candidate_name": name, "repo_url": url}]
+
+    if not override and not settings.google_sheet_id:
+        print("Error: GOOGLE_SHEET_ID is required when not using --candidate.", file=sys.stderr)
+        sys.exit(1)
+
+    results = run_pipeline(settings, override_candidates=override)
 
     print(f"\n{'='*60}")
     print(f"Pipeline complete — {len(results)} candidate(s)")

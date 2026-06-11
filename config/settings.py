@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str
     github_token: str = ""
-    google_sheet_id: str
+    google_sheet_id: str = ""  # optional when --candidate flag is used
 
     true_labels_path: Path = Path("data/test_churn_labels.csv")
     cache_db_path: Path = Path(".cache/grader.db")

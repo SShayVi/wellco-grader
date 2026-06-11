@@ -21,10 +21,14 @@ from grader.storage.models import CandidateResult, PredictionStatus
 logger = logging.getLogger(__name__)
 
 
-def run_pipeline(settings: Settings) -> list[CandidateResult]:
+def run_pipeline(
+    settings: Settings,
+    override_candidates: list[dict] | None = None,
+) -> list[CandidateResult]:
     """
-    Process all candidates in the Google Sheet.
+    Process all candidates in the Google Sheet (or override_candidates if provided).
 
+    override_candidates: list of {candidate_name, repo_url} dicts — bypasses Google Sheet.
     - Skips candidates whose latest commit SHA is already cached.
     - Continues processing remaining candidates if one fails.
     - Returns the full list of results (cached + newly processed).
@@ -40,7 +44,10 @@ def run_pipeline(settings: Settings) -> list[CandidateResult]:
         logger.error("review_questions.yaml not found at %s", questions_path)
         sys.exit(1)
 
-    candidates = fetch_candidates(settings.google_sheet_id)
+    if override_candidates is not None:
+        candidates = override_candidates
+    else:
+        candidates = fetch_candidates(settings.google_sheet_id)
     if not candidates:
         logger.warning("No candidates found in Google Sheet")
         return []
