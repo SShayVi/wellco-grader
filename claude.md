@@ -63,6 +63,55 @@ wellco-grader/
 
 ---
 
+## Validation (`grader/validation.py`)
+
+Standalone module that validates and standardises any prediction CSV.
+Called internally by the pipeline; also available as a CLI command.
+
+```bash
+# Validate a remote CSV (with overlap check against true labels)
+python -m grader validate https://github.com/.../predictions.csv
+
+# Validate a local file
+python -m grader validate /path/to/predictions.csv
+```
+
+**Function signature:**
+```python
+from grader.validation import validate_and_standardize
+
+result = validate_and_standardize(
+    raw,                      # bytes — raw CSV content
+    true_member_ids=None,     # set[int] — test set member IDs; skips overlap checks if None
+    min_overlap=0.5,          # float — minimum required ID overlap fraction
+)
+result.ok           # bool — False if any ERROR-level issue found
+result.standardized # pd.DataFrame with [member_id, score] sorted descending; None on error
+result.issues       # list[Issue] — full audit trail with severity + message
+result.summary()    # formatted multi-line string for printing
+```
+
+**Issue codes:**
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `PARSE_ERROR` | ERROR | Cannot read CSV file |
+| `EMPTY_CSV` | ERROR | File has no rows |
+| `COLUMNS_NOT_FOUND` | ERROR | Cannot identify member_id or score column |
+| `NO_VALID_ROWS` | ERROR | No numeric rows after normalization |
+| `WRONG_DATASET` | ERROR | IDs don't match test set; specific message if training IDs detected (range 0–20,000) |
+| `LOW_OVERLAP` | ERROR | < min_overlap of IDs found in test set |
+| `COLUMN_REMAPPED` | INFO | Non-standard but recognized column names |
+| `RANK_INVERTED` | INFO | Rank column detected and negated |
+| `PARTIAL_SUBMISSION` | INFO | Fewer than 10,000 members submitted |
+| `ROWS_DROPPED` | WARNING | Non-numeric rows removed |
+| `DUPLICATE_IDS` | WARNING | Duplicate member_ids deduplicated |
+| `DEGENERATE_SCORES` | WARNING | All scores identical |
+| `LOW_SCORE_VARIETY` | WARNING | Fewer than 10 unique score values |
+| `LOW_ROW_COUNT` | WARNING | Fewer than 10 rows submitted |
+
+---
+
 ## Pipeline (`grader/pipeline.py`)
 
 For each candidate:
@@ -71,10 +120,32 @@ For each candidate:
    direct download URLs.
 2. **Hash content** (MD5) — used as the cache key alongside `candidate_name`.
 3. **Cache check** — skip if `(candidate_name, content_hash)` already in SQLite.
-4. **Map columns** — heuristic matching by column name:
-   - `member_id`: `member_id`, `memberid`, `member`, `id`, `user_id`, `userid`, `user`
-   - `score`: `score`, `churn_score`, `churn_prob`, `churn_probability`, `probability`,
-     `prob`, `risk`, `risk_score`, `pred`, `prediction`
+4. **Map columns** — three-stage heuristic (all case-insensitive):
+   1. **Exact match** against known hint lists (see below)
+   2. **Substring match** — hint contained in column name or vice-versa
+   3. **Dtype fallback** — if exactly 2 numeric columns and neither matched, infer
+      by value range (0-1 floats → score, large integers → member_id)
+
+   **member_id hints** (in priority order):
+   `member_id`, `memberid`, `member`, `id`, `user_id`, `userid`, `user`,
+   `customer_id`, `client_id`, `patient_id`, `account_id`
+
+   **score hints** (in priority order — higher = preferred when multiple match):
+   `weighted_uplift`, `uplift`, `cate`, `cate_estimate`, `cate_score`,
+   `benefit_score`,
+   `propensity_score`, `propensity`, `priority_score`, `prioritization_score`,
+   `churn_score`, `churn_prob`, `churn_probability`,
+   `churn_prob_no_outreach`, `p_churn_no_outreach`, `baseline_churn_proba`,
+   `score`, `probability`, `prob`, `risk`, `risk_score`, `pred`, `prediction`,
+   `rank` *(inverted — rank 1 treated as highest score)*
+
+   **Rank inversion**: columns named `rank`, `ranking`, or `position` are negated
+   before sorting so that rank 1 ends up first (highest priority).
+
+   **Partial submissions**: CSVs containing only the candidate's top-N recommended
+   members are fully supported. The precision curve is computed for N=1..submitted_count;
+   `precision_at_n(N)` returns `None` for N > submitted_count (shown as "—" in the dashboard).
+
 5. **Validate** — member_id overlap with true labels must be ≥ 50%.
 6. **Score** — compute full precision@N curve (N=1..len(predictions)).
 7. **Cache** result.
@@ -168,7 +239,10 @@ prior agent-based design), the table is automatically dropped and recreated.
 |---|---|
 | CSV URL unreachable | `status=CSV_DOWNLOAD_ERROR`, not cached (will retry next run) |
 | Cannot parse CSV | `status=SCHEMA_ERROR`, cached |
-| Column names unrecognized | `status=SCHEMA_ERROR`, cached; add hints to `_MEMBER_ID_HINTS` / `_SCORE_HINTS` in `pipeline.py` |
+| Column names unrecognized | Three-stage heuristic attempted; if all fail → `status=SCHEMA_ERROR`. To add a name: extend `_MEMBER_ID_HINTS` or `_SCORE_HINTS` in `pipeline.py` |
+| CSV with only top-N rows | Fully supported; precision curve covers N=1..submitted_count only |
+| Rank column (1=best) | Auto-detected (`rank`/`ranking`/`position`) and negated so rank 1 sorts first |
+| Wrong member ID dataset | `status=INVALID_PREDICTIONS` — candidate used IDs not in the test set (e.g., training set IDs) |
 | member_id overlap < 50% | `status=INVALID_PREDICTIONS`, cached |
 | All scores identical | `status=DEGENERATE_PREDICTIONS`, precision curve still computed |
 | Google Drive sharing link | Auto-converted to `drive.google.com/uc?export=download&id=...` |
@@ -184,6 +258,10 @@ python -m grader
 
 # Process a single candidate (no sheet needed)
 python -m grader --candidate "Alice" https://example.com/predictions.csv 800
+
+# Validate a CSV without scoring (candidates can use this to check before submitting)
+python -m grader validate https://github.com/.../predictions.csv
+python -m grader validate /local/path/predictions.csv
 ```
 
 ---
