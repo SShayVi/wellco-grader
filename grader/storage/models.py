@@ -18,6 +18,7 @@ class CandidateResult(BaseModel):
     content_hash: str  # MD5 of CSV bytes — cache key alongside candidate_name
     status: PredictionStatus = PredictionStatus.CSV_DOWNLOAD_ERROR
     precision_curve: Optional[list[float]] = None  # precision@N for N=1..len(predictions)
+    ranked_member_ids: Optional[list] = None       # member_ids sorted by score desc
     member_id_overlap: Optional[float] = None
     error: Optional[str] = None
 

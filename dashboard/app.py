@@ -265,3 +265,101 @@ else:
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Section 3: Overlap Analysis
+# ---------------------------------------------------------------------------
+st.header(f"Prediction Overlap @ N={n_slider:,}")
+
+ok_ranked = [r for r in results if r.status == PredictionStatus.OK and r.ranked_member_ids]
+
+if len(ok_ranked) < 2:
+    if any(r.status == PredictionStatus.OK and not r.ranked_member_ids for r in results):
+        st.info("Overlap data missing — re-run `python -m grader` to populate ranked predictions.")
+    else:
+        st.info("Need at least 2 valid candidates to show overlap.")
+else:
+    cand_names = [r.candidate_name for r in ok_ranked]
+    selected_names = st.multiselect(
+        "Candidates to compare",
+        options=cand_names,
+        default=cand_names,
+    )
+    sel = [r for r in ok_ranked if r.candidate_name in selected_names]
+
+    if len(sel) < 2:
+        st.info("Select at least 2 candidates.")
+    else:
+        # Build top-N sets per candidate
+        top_sets = {r.candidate_name: set(r.ranked_member_ids[:n_slider]) for r in sel}
+        names = [r.candidate_name for r in sel]
+
+        col_heat, col_excl = st.columns([1, 1])
+
+        # --- Pairwise overlap heatmap ---
+        with col_heat:
+            matrix = []
+            text_matrix = []
+            for a in names:
+                row, trow = [], []
+                for b in names:
+                    pct = len(top_sets[a] & top_sets[b]) / max(len(top_sets[a]), 1) * 100
+                    row.append(round(pct, 1))
+                    trow.append(f"{pct:.1f}%")
+                matrix.append(row)
+                text_matrix.append(trow)
+
+            fig_heat = go.Figure(go.Heatmap(
+                z=matrix,
+                x=names,
+                y=names,
+                colorscale="Blues",
+                zmin=0,
+                zmax=100,
+                text=text_matrix,
+                texttemplate="%{text}",
+                colorbar=dict(title="% overlap"),
+            ))
+            fig_heat.update_layout(
+                title="Pairwise overlap (row's top-N ∩ col's top-N) / N",
+                height=120 + 80 * len(names),
+                margin=dict(l=120, r=40, t=60, b=80),
+                xaxis=dict(tickangle=-30),
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
+
+        # --- Exclusivity distribution ---
+        with col_excl:
+            from collections import Counter
+            union_members = set().union(*top_sets.values())
+            counts = Counter(
+                sum(1 for s in top_sets.values() if m in s)
+                for m in union_members
+            )
+            k_vals = list(range(1, len(sel) + 1))
+            y_vals = [counts.get(k, 0) for k in k_vals]
+            labels = [
+                "Unique to 1" if k == 1
+                else f"In all {k}" if k == len(sel)
+                else f"In {k}"
+                for k in k_vals
+            ]
+
+            fig_excl = go.Figure(go.Bar(
+                x=labels,
+                y=y_vals,
+                marker_color=[
+                    "#d62728" if k == 1 else "#2ca02c" if k == len(sel) else "#1f77b4"
+                    for k in k_vals
+                ],
+                text=y_vals,
+                textposition="outside",
+            ))
+            fig_excl.update_layout(
+                title="How many candidates share each member in top-N",
+                xaxis_title="Shared by",
+                yaxis_title="Member count",
+                height=120 + 80 * len(names),
+                margin=dict(l=60, r=40, t=60, b=60),
+            )
+            st.plotly_chart(fig_excl, use_container_width=True)

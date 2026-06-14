@@ -156,11 +156,13 @@ def _process_candidate(
     # Step 7: score
     status = PredictionStatus.DEGENERATE_PREDICTIONS if out["score"].nunique() == 1 else PredictionStatus.OK
     precision_curve = scorer.score(out)
+    ranked_ids = out["member_id"].astype(int).tolist()
 
     result = CandidateResult(
         candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
         content_hash=content_hash, status=status,
-        precision_curve=precision_curve, member_id_overlap=overlap,
+        precision_curve=precision_curve, ranked_member_ids=ranked_ids,
+        member_id_overlap=overlap,
     )
     cache.put(result)
     logger.info("%s — %s, precision@%d=%.3f", name, status.value, recommended_n,
