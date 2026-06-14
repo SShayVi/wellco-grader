@@ -71,11 +71,21 @@ with st.sidebar:
             try:
                 run_results = run_pipeline(settings)
                 get_cache.clear()
-                ok = sum(1 for r in run_results if r.status == PredictionStatus.OK)
-                st.success(f"Done — {ok}/{len(run_results)} OK")
+                st.session_state["last_run"] = [
+                    {"name": r.candidate_name, "status": r.status.value, "error": r.error}
+                    for r in run_results
+                ]
                 st.rerun()
             except Exception as e:
-                st.error(f"Pipeline error: {e}")
+                st.session_state["last_run"] = [{"name": "—", "status": "PIPELINE_ERROR", "error": str(e)}]
+                st.rerun()
+
+    if "last_run" in st.session_state:
+        for row in st.session_state["last_run"]:
+            icon = "🟢" if row["status"] == "OK" else "🔴"
+            st.caption(f"{icon} {row['name']} — {row['status']}")
+            if row["error"]:
+                st.caption(f"   ↳ {row['error']}")
 
     st.divider()
 
