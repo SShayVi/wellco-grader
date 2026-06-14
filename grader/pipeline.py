@@ -47,6 +47,7 @@ def run_pipeline(
             name=c["candidate_name"],
             csv_url=c["csv_url"],
             recommended_n=int(c["recommended_n"]),
+            n_defaulted=bool(c.get("n_defaulted", False)),
             cache=cache,
             scorer=scorer,
             min_overlap=settings.min_member_id_overlap,
@@ -63,25 +64,31 @@ def _process_candidate(
     name: str,
     csv_url: str,
     recommended_n: int,
+    n_defaulted: bool = False,
     cache: ResultCache,
     scorer: Scorer,
     min_overlap: float,
 ) -> CandidateResult:
     logger.info("Processing candidate: %s", name)
+    notes = "Rec. N defaulted to 1,000 (not set in sheet)" if n_defaulted else None
 
     # Step 1: download CSV
     try:
         raw = _download_csv(csv_url)
     except Exception as e:
         logger.error("Download failed for %s: %s", name, e)
-        return CandidateResult(
+        url_hash = "url:" + hashlib.md5(csv_url.encode()).hexdigest()
+        result = CandidateResult(
             candidate_name=name,
             csv_url=csv_url,
             recommended_n=recommended_n,
-            content_hash="download_error",
+            content_hash=url_hash,
             status=PredictionStatus.CSV_DOWNLOAD_ERROR,
             error=str(e),
+            notes=notes,
         )
+        cache.put(result)
+        return result
 
     content_hash = hashlib.md5(raw).hexdigest()
 
@@ -106,6 +113,7 @@ def _process_candidate(
             content_hash=content_hash, status=status,
             member_id_overlap=vr.overlap_pct,
             error="; ".join(i.message for i in vr.errors()),
+            notes=notes,
         )
         cache.put(result)
         return result
@@ -123,6 +131,7 @@ def _process_candidate(
         content_hash=content_hash, status=status,
         precision_curve=precision_curve, ranked_member_ids=ranked_ids,
         member_id_overlap=vr.overlap_pct,
+        notes=notes,
     )
     cache.put(result)
     logger.info("%s — %s, precision@%d=%.3f", name, status.value, recommended_n,

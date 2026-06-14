@@ -228,6 +228,10 @@ SQLite at `CACHE_DB_PATH` (default `.cache/grader.db`).
 downloaded CSV bytes. If a candidate re-submits the same CSV at the same URL, the
 cached result is returned instantly. A new CSV (changed content) triggers reprocessing.
 
+**Download errors** use `content_hash = "url:<md5_of_url>"` so they are cached and
+appear in the leaderboard. They will be retried (and overwritten) on the next pipeline
+run, allowing the candidate to fix their URL and resubmit.
+
 **Schema migration**: on startup, if the DB has the old `commit_sha` column (from the
 prior agent-based design), the table is automatically dropped and recreated.
 
@@ -237,7 +241,8 @@ prior agent-based design), the table is automatically dropped and recreated.
 
 | Scenario | Behavior |
 |---|---|
-| CSV URL unreachable | `status=CSV_DOWNLOAD_ERROR`, not cached (will retry next run) |
+| CSV URL unreachable | `status=CSV_DOWNLOAD_ERROR`, cached (appears in leaderboard); retried on next run |
+| `recommended_n` missing in sheet | Defaults to 1,000; leaderboard Status column shows "Rec. N defaulted to 1,000" |
 | Cannot parse CSV | `status=SCHEMA_ERROR`, cached |
 | Column names unrecognized | Three-stage heuristic attempted; if all fail → `status=SCHEMA_ERROR`. To add a name: extend `_MEMBER_ID_HINTS` or `_SCORE_HINTS` in `pipeline.py` |
 | CSV with only top-N rows | Fully supported; precision curve covers N=1..submitted_count only |

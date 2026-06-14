@@ -84,11 +84,10 @@ with st.sidebar:
                 st.rerun()
 
     if "last_run" in st.session_state:
-        for row in st.session_state["last_run"]:
-            icon = "🟢" if row["status"] == "OK" else "🔴"
-            st.caption(f"{icon} {row['name']} — {row['status']}")
-            if row["error"]:
-                st.caption(f"   ↳ {row['error']}")
+        rows = st.session_state["last_run"]
+        n_ok = sum(1 for r in rows if r["status"] == "OK")
+        n_total = len(rows)
+        st.caption(f"Last run: {n_ok}/{n_total} OK — see leaderboard for details")
 
     st.divider()
 
@@ -169,6 +168,16 @@ def _effective_rec_n(r: CandidateResult):
     return st.session_state.rec_n_overrides.get(r.candidate_name, r.recommended_n)
 
 
+def _status_label(r: CandidateResult) -> str:
+    if r.error:
+        return r.error
+    if r.status == PredictionStatus.DEGENERATE_PREDICTIONS:
+        return "All scores identical — ranking unreliable"
+    if r.notes:
+        return r.notes
+    return ""
+
+
 def _build_leaderboard(results: list[CandidateResult], n: int) -> pd.DataFrame:
     rows = []
     for r in results:
@@ -181,16 +190,17 @@ def _build_leaderboard(results: list[CandidateResult], n: int) -> pd.DataFrame:
                 "Candidate": r.candidate_name,
                 f"Precision@{n:,}": f"{p_at_n:.3f}" if p_at_n is not None else "—",
                 "_sort": p_at_n if p_at_n is not None else -1,
-                f"Precision@Rec.N": f"{p_at_rec:.3f}" if p_at_rec is not None else "—",
+                "Precision@Rec.N": f"{p_at_rec:.3f}" if p_at_rec is not None else "—",
                 "Rec. N": rec_n,
-                "Status": r.status.value,
+                "Status": _status_label(r),
+                "_status_code": r.status.value,
             }
         )
 
     df = pd.DataFrame(rows)
     if show_only_ok:
-        df = df[df["Status"] == PredictionStatus.OK.value]
-    df = df.sort_values("_sort", ascending=False).drop(columns=["_sort"])
+        df = df[df["_status_code"] == PredictionStatus.OK.value]
+    df = df.sort_values("_sort", ascending=False).drop(columns=["_sort", "_status_code"])
     df = df.reset_index(drop=True)
     df.index += 1
     return df

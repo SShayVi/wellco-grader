@@ -20,7 +20,8 @@ class CandidateResult(BaseModel):
     precision_curve: Optional[list[float]] = None  # precision@N for N=1..len(predictions)
     ranked_member_ids: Optional[list] = None       # member_ids sorted by score desc
     member_id_overlap: Optional[float] = None
-    error: Optional[str] = None
+    error: Optional[str] = None   # set on any non-OK status
+    notes: Optional[str] = None   # informational (e.g. "Rec. N defaulted to 1,000")
 
     def precision_at_n(self, n: int) -> Optional[float]:
         if self.precision_curve is None:

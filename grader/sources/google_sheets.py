@@ -27,18 +27,26 @@ def fetch_candidates(sheet_id: str) -> list[dict]:
 
     # Flexible column matching — sheet column names may vary
     col_map = _find_columns(df.columns.tolist())
-    missing = [k for k, v in col_map.items() if v is None]
-    if missing:
+    required_missing = [k for k in ("candidate_name", "csv_url") if col_map.get(k) is None]
+    if required_missing:
         raise ValueError(
-            f"Google Sheet is missing columns for: {missing}. "
+            f"Google Sheet is missing required columns for: {required_missing}. "
             f"Found: {list(df.columns)}"
         )
 
-    df = df.rename(columns={col_map[k]: k for k in col_map})
+    rename = {col_map[k]: k for k in col_map if col_map[k] is not None}
+    df = df.rename(columns=rename)
+
+    if "recommended_n" not in df.columns:
+        df["recommended_n"] = None  # column absent entirely
+
     df = df[["candidate_name", "csv_url", "recommended_n"]].dropna(subset=["candidate_name", "csv_url"])
     df["candidate_name"] = df["candidate_name"].str.strip()
     df["csv_url"] = df["csv_url"].str.strip()
-    df["recommended_n"] = pd.to_numeric(df["recommended_n"], errors="coerce").fillna(1000).astype(int)
+
+    rec_n_raw = pd.to_numeric(df["recommended_n"], errors="coerce")
+    df["n_defaulted"] = rec_n_raw.isna()
+    df["recommended_n"] = rec_n_raw.fillna(1000).astype(int)
 
     # Deduplicate by candidate_name, keep last row
     df = df.drop_duplicates(subset=["candidate_name"], keep="last")
