@@ -13,9 +13,8 @@ def fetch_candidates(sheet_id: str) -> list[dict]:
     """
     Fetch the candidate list from a public Google Sheet.
 
-    Returns a list of dicts with keys 'candidate_name' and 'repo_url'.
-    Deduplicates by repo_url (last row wins).
-    Raises requests.HTTPError if the sheet is not accessible.
+    Expected columns: candidate_name, csv_url, recommended_n
+    Returns a list of dicts with those keys.
     """
     url = _EXPORT_URL.format(sheet_id=sheet_id)
     logger.info("Fetching candidates from sheet %s", sheet_id)
@@ -26,7 +25,7 @@ def fetch_candidates(sheet_id: str) -> list[dict]:
     df = pd.read_csv(StringIO(response.text))
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    required = {"candidate_name", "repo_url"}
+    required = {"candidate_name", "csv_url", "recommended_n"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(
@@ -34,12 +33,13 @@ def fetch_candidates(sheet_id: str) -> list[dict]:
             f"Found: {list(df.columns)}"
         )
 
-    df = df[["candidate_name", "repo_url"]].dropna(subset=["repo_url"])
-    df["repo_url"] = df["repo_url"].str.strip()
+    df = df[["candidate_name", "csv_url", "recommended_n"]].dropna(subset=["candidate_name", "csv_url"])
     df["candidate_name"] = df["candidate_name"].str.strip()
+    df["csv_url"] = df["csv_url"].str.strip()
+    df["recommended_n"] = pd.to_numeric(df["recommended_n"], errors="coerce").fillna(1000).astype(int)
 
-    # Deduplicate by repo_url, keep last
-    df = df.drop_duplicates(subset=["repo_url"], keep="last")
+    # Deduplicate by candidate_name, keep last row
+    df = df.drop_duplicates(subset=["candidate_name"], keep="last")
 
     candidates = df.to_dict("records")
     logger.info("Found %d candidates", len(candidates))
