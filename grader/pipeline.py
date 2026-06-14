@@ -1,183 +1,203 @@
 """
-Pipeline orchestrator: reads candidates from Google Sheet, runs agents,
-scores predictions, and writes results to the SQLite cache.
+Pipeline orchestrator: reads candidates from Google Sheet, downloads their prediction CSVs,
+maps columns, scores against true labels, and writes results to the SQLite cache.
 
-Core invariant: a repo is processed at most once per commit SHA.
+Core invariant: a candidate's CSV is processed at most once per content hash.
 """
+import hashlib
 import logging
-import sys
-from pathlib import Path
+import re
+from io import BytesIO
+from typing import Optional, List
+
+import pandas as pd
+import requests
 
 from config.settings import Settings
-from grader.agents.code_reviewer import CodeReviewerAgent
-from grader.agents.n_extractor import NExtractorAgent
-from grader.agents.prediction_agent import PredictionAgent
 from grader.scoring.scorer import Scorer
-from grader.sources.github import GitHubClient, RepoUnavailableError
 from grader.sources.google_sheets import fetch_candidates
 from grader.storage.cache import ResultCache
 from grader.storage.models import CandidateResult, PredictionStatus
 
 logger = logging.getLogger(__name__)
 
+_MEMBER_ID_HINTS = ["member_id", "memberid", "member", "id", "user_id", "userid", "user"]
+_SCORE_HINTS = [
+    "score", "churn_score", "churn_prob", "churn_probability", "probability",
+    "prob", "risk", "risk_score", "pred", "prediction",
+]
+
 
 def run_pipeline(
     settings: Settings,
-    override_candidates: list[dict] | None = None,
-) -> list[CandidateResult]:
+    override_candidates: Optional[List[dict]] = None,
+) -> List[CandidateResult]:
     """
-    Process all candidates in the Google Sheet (or override_candidates if provided).
+    Process all candidates from the Google Sheet (or override_candidates if provided).
 
-    override_candidates: list of {candidate_name, repo_url} dicts — bypasses Google Sheet.
-    - Skips candidates whose latest commit SHA is already cached.
-    - Continues processing remaining candidates if one fails.
-    - Returns the full list of results (cached + newly processed).
+    override_candidates: list of {candidate_name, csv_url, recommended_n} dicts.
+    Skips candidates whose CSV content hash is already cached.
     """
     _configure_logging(settings.log_level)
 
     cache = ResultCache(settings.cache_db_path)
     scorer = Scorer(settings.true_labels_path)
-    gh = GitHubClient(token=settings.github_token)
 
-    questions_path = Path("config/review_questions.yaml")
-    if not questions_path.exists():
-        logger.error("review_questions.yaml not found at %s", questions_path)
-        sys.exit(1)
-
-    if override_candidates is not None:
-        candidates = override_candidates
-    else:
-        candidates = fetch_candidates(settings.google_sheet_id)
+    candidates = override_candidates or fetch_candidates(settings.google_sheet_id)
     if not candidates:
-        logger.warning("No candidates found in Google Sheet")
+        logger.warning("No candidates found")
         return []
 
-    prediction_agent = PredictionAgent(
-        api_key=settings.anthropic_api_key,
-        github_client=gh,
-        true_member_ids=scorer.true_member_ids,
-        model=settings.anthropic_model,
-        max_csv_candidates=settings.max_csv_candidates,
-        min_overlap=settings.min_member_id_overlap,
-    )
-    n_agent = NExtractorAgent(
-        api_key=settings.anthropic_api_key,
-        github_client=gh,
-        model=settings.anthropic_model,
-    )
-    reviewer = CodeReviewerAgent(
-        api_key=settings.anthropic_api_key,
-        github_client=gh,
-        questions_path=questions_path,
-        model=settings.anthropic_model,
-        max_chars=settings.max_repo_chars,
-    )
-
     results: list[CandidateResult] = []
-    for candidate in candidates:
-        name = candidate["candidate_name"]
-        url = candidate["repo_url"]
+    for c in candidates:
         result = _process_candidate(
-            name=name,
-            url=url,
-            gh=gh,
+            name=c["candidate_name"],
+            csv_url=c["csv_url"],
+            recommended_n=int(c["recommended_n"]),
             cache=cache,
-            prediction_agent=prediction_agent,
-            n_agent=n_agent,
-            reviewer=reviewer,
             scorer=scorer,
+            min_overlap=settings.min_member_id_overlap,
         )
         results.append(result)
 
-    logger.info(
-        "Pipeline complete: %d total, %d OK, %d errors",
-        len(results),
-        sum(1 for r in results if r.status == PredictionStatus.OK),
-        sum(1 for r in results if r.error),
-    )
+    ok = sum(1 for r in results if r.status == PredictionStatus.OK)
+    logger.info("Pipeline complete: %d total, %d OK, %d errors", len(results), ok, len(results) - ok)
     return results
 
 
 def _process_candidate(
     *,
     name: str,
-    url: str,
-    gh: GitHubClient,
+    csv_url: str,
+    recommended_n: int,
     cache: ResultCache,
-    prediction_agent: PredictionAgent,
-    n_agent: NExtractorAgent,
-    reviewer: CodeReviewerAgent,
     scorer: Scorer,
+    min_overlap: float,
 ) -> CandidateResult:
-    logger.info("Processing candidate: %s (%s)", name, url)
+    logger.info("Processing candidate: %s", name)
 
-    # Step 1: get latest commit SHA
+    # Step 1: download CSV
     try:
-        repo = gh.get_repo(url)
-        sha = gh.get_latest_sha(repo)
-    except RepoUnavailableError as e:
-        logger.warning("Repo unavailable for %s: %s", name, e)
-        result = CandidateResult(
+        raw = _download_csv(csv_url)
+    except Exception as e:
+        logger.error("Download failed for %s: %s", name, e)
+        return CandidateResult(
             candidate_name=name,
-            repo_url=url,
-            commit_sha="unavailable",
-            prediction_result=None,
+            csv_url=csv_url,
+            recommended_n=recommended_n,
+            content_hash="download_error",
+            status=PredictionStatus.CSV_DOWNLOAD_ERROR,
             error=str(e),
         )
-        # Don't cache unavailable — retry on next run
-        return result
 
-    # Step 2: cache check — skip if already processed this SHA
-    cached = cache.get(name, sha)
+    content_hash = hashlib.md5(raw).hexdigest()
+
+    # Step 2: cache check
+    cached = cache.get(name, content_hash)
     if cached is not None:
-        logger.info("Cache hit for %s @ %s — skipping", name, sha[:7])
+        logger.info("Cache hit for %s — skipping", name)
         return cached
 
-    # Step 3: run agents
-    result = CandidateResult(candidate_name=name, repo_url=url, commit_sha=sha)
-
+    # Step 3: parse CSV
     try:
-        pred_result, pred_df = prediction_agent.run(repo)
-        result.prediction_result = pred_result
-        logger.info("%s — predictions: %s", name, pred_result.status)
+        df = pd.read_csv(BytesIO(raw))
     except Exception as e:
-        logger.error("PredictionAgent failed for %s: %s", name, e, exc_info=True)
-        result.error = f"PredictionAgent error: {e}"
+        result = CandidateResult(
+            candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
+            content_hash=content_hash, status=PredictionStatus.SCHEMA_ERROR,
+            error=f"Cannot parse CSV: {e}",
+        )
         cache.put(result)
         return result
 
-    try:
-        n_result = n_agent.run(
-            repo,
-            predictions_df=pred_df,
-            predictions_path=pred_result.csv_path,
+    # Step 4: map columns
+    mapping = _map_columns(df)
+    if mapping is None:
+        cols = list(df.columns)
+        result = CandidateResult(
+            candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
+            content_hash=content_hash, status=PredictionStatus.SCHEMA_ERROR,
+            error=f"Could not identify member_id and score columns. Found: {cols}",
         )
-        result.n_extraction = n_result
-        logger.info("%s — N=%d (source=%s, conf=%.2f)", name, n_result.n, n_result.source, n_result.confidence)
-    except Exception as e:
-        logger.error("NExtractorAgent failed for %s: %s", name, e, exc_info=True)
-        # Non-fatal: continue without N
-        result.error = f"NExtractorAgent error: {e}"
+        cache.put(result)
+        return result
 
-    try:
-        review = reviewer.run(repo)
-        result.review_result = review
-        logger.info("%s — review score: %.2f", name, review.weighted_score)
-    except Exception as e:
-        logger.error("CodeReviewerAgent failed for %s: %s", name, e, exc_info=True)
-        # Non-fatal: continue without review
+    # Step 5: normalize
+    out = pd.DataFrame()
+    out["member_id"] = pd.to_numeric(df[mapping["member_id_col"]], errors="coerce").astype("Int64")
+    out["score"] = pd.to_numeric(df[mapping["score_col"]], errors="coerce")
+    out = out.dropna(subset=["member_id", "score"])
+    out = out.sort_values("score", ascending=False).reset_index(drop=True)
 
-    # Step 4: score predictions
-    if pred_df is not None and pred_result.status in (
-        PredictionStatus.OK,
-        PredictionStatus.DEGENERATE_PREDICTIONS,
-    ):
-        curve = scorer.score(pred_df)
-        result.precision_curve = curve
+    if out.empty:
+        result = CandidateResult(
+            candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
+            content_hash=content_hash, status=PredictionStatus.SCHEMA_ERROR,
+            error="No valid rows after normalization",
+        )
+        cache.put(result)
+        return result
 
-    # Step 5: persist
+    # Step 6: overlap check
+    candidate_ids = set(out["member_id"].dropna().astype(int))
+    true_ids = scorer.true_member_ids
+    overlap = len(candidate_ids & true_ids) / len(candidate_ids) if candidate_ids else 0.0
+
+    if overlap < min_overlap:
+        result = CandidateResult(
+            candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
+            content_hash=content_hash, status=PredictionStatus.INVALID_PREDICTIONS,
+            member_id_overlap=overlap,
+            error=f"member_id overlap {overlap:.1%} < required {min_overlap:.0%}",
+        )
+        cache.put(result)
+        return result
+
+    # Step 7: score
+    status = PredictionStatus.DEGENERATE_PREDICTIONS if out["score"].nunique() == 1 else PredictionStatus.OK
+    precision_curve = scorer.score(out)
+
+    result = CandidateResult(
+        candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
+        content_hash=content_hash, status=status,
+        precision_curve=precision_curve, member_id_overlap=overlap,
+    )
     cache.put(result)
+    logger.info("%s — %s, precision@%d=%.3f", name, status.value, recommended_n,
+                result.precision_at_recommended_n or 0)
     return result
+
+
+def _download_csv(url: str) -> bytes:
+    """Download CSV bytes, handling Google Drive sharing links."""
+    url = _normalize_url(url)
+    resp = requests.get(url, timeout=60, allow_redirects=True)
+    resp.raise_for_status()
+    return resp.content
+
+
+def _normalize_url(url: str) -> str:
+    """Convert Google Drive sharing URLs to direct download URLs."""
+    # https://drive.google.com/file/d/{ID}/view?...
+    m = re.match(r"https://drive\.google\.com/file/d/([^/?]+)", url)
+    if m:
+        return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
+    # https://drive.google.com/open?id={ID}
+    m = re.search(r"[?&]id=([^&]+)", url)
+    if m and "drive.google.com" in url:
+        return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
+    return url
+
+
+def _map_columns(df: pd.DataFrame) -> Optional[dict]:
+    """Heuristic column mapper: find member_id and score columns by name."""
+    lower = {c.lower().strip(): c for c in df.columns}
+    member_col = next((lower[k] for k in _MEMBER_ID_HINTS if k in lower), None)
+    score_col = next((lower[k] for k in _SCORE_HINTS if k in lower), None)
+    if member_col and score_col:
+        logger.debug("Column mapping: member_id=%s, score=%s", member_col, score_col)
+        return {"member_id_col": member_col, "score_col": score_col}
+    return None
 
 
 def _configure_logging(level: str) -> None:

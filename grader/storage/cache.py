@@ -9,16 +9,16 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS candidate_runs (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
     candidate_name TEXT NOT NULL,
-    repo_url       TEXT NOT NULL,
-    commit_sha     TEXT NOT NULL,
+    csv_url        TEXT NOT NULL,
+    content_hash   TEXT NOT NULL,
     result_json    TEXT NOT NULL,
     created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(candidate_name, commit_sha)
+    UNIQUE(candidate_name, content_hash)
 );
-CREATE INDEX IF NOT EXISTS idx_candidate_sha
-    ON candidate_runs(candidate_name, commit_sha);
+CREATE INDEX IF NOT EXISTS idx_candidate_hash
+    ON candidate_runs(candidate_name, content_hash);
 """
 
 
@@ -35,17 +35,27 @@ class ResultCache:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
+            # Migrate if the old schema (commit_sha column) is present
+            existing = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='candidate_runs'"
+            ).fetchone()
+            if existing:
+                cols = [row[1] for row in conn.execute("PRAGMA table_info(candidate_runs)").fetchall()]
+                if "content_hash" not in cols:
+                    logger.info("Migrating cache DB: dropping old schema (commit_sha-based)")
+                    conn.execute("DROP TABLE IF EXISTS candidate_runs")
+                    conn.execute("DROP INDEX IF EXISTS idx_candidate_sha")
             conn.executescript(_SCHEMA)
 
-    def get(self, candidate_name: str, commit_sha: str) -> Optional[CandidateResult]:
+    def get(self, candidate_name: str, content_hash: str) -> Optional[CandidateResult]:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT result_json FROM candidate_runs "
-                "WHERE candidate_name = ? AND commit_sha = ?",
-                (candidate_name, commit_sha),
+                "WHERE candidate_name = ? AND content_hash = ?",
+                (candidate_name, content_hash),
             ).fetchone()
         if row:
-            logger.debug("Cache hit for %s @ %s", candidate_name, commit_sha[:7])
+            logger.debug("Cache hit for %s (%s)", candidate_name, content_hash[:7])
             return CandidateResult.model_validate_json(row["result_json"])
         return None
 
@@ -53,16 +63,16 @@ class ResultCache:
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO candidate_runs "
-                "(candidate_name, repo_url, commit_sha, result_json) "
+                "(candidate_name, csv_url, content_hash, result_json) "
                 "VALUES (?, ?, ?, ?)",
                 (
                     result.candidate_name,
-                    result.repo_url,
-                    result.commit_sha,
+                    result.csv_url,
+                    result.content_hash,
                     result.model_dump_json(),
                 ),
             )
-        logger.debug("Cached result for %s @ %s", result.candidate_name, result.commit_sha[:7])
+        logger.debug("Cached result for %s", result.candidate_name)
 
     def get_all_latest(self) -> list[CandidateResult]:
         """Return the most recent result per candidate, ordered by candidate name."""
@@ -74,12 +84,3 @@ class ResultCache:
                 ") ORDER BY candidate_name"
             ).fetchall()
         return [CandidateResult.model_validate_json(row["result_json"]) for row in rows]
-
-    def has(self, candidate_name: str, commit_sha: str) -> bool:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM candidate_runs "
-                "WHERE candidate_name = ? AND commit_sha = ?",
-                (candidate_name, commit_sha),
-            ).fetchone()
-        return row is not None

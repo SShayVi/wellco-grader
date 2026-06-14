@@ -168,14 +168,16 @@ class TestScorer:
         assert curve is not None
 
     def test_precision_at_n_property(self, scorer, all_member_ids):
-        from grader.storage.models import CandidateResult, PredictionResult, PredictionStatus
+        from grader.storage.models import CandidateResult, PredictionStatus
         ranked = list(all_member_ids)[:100]
         df = pd.DataFrame({"member_id": ranked, "score": range(100, 0, -1), "rank": range(1, 101)})
         curve = scorer.score(df)
         result = CandidateResult(
             candidate_name="test",
-            repo_url="http://example.com",
-            commit_sha="abc",
+            csv_url="https://example.com/test.csv",
+            recommended_n=50,
+            content_hash="abc123",
+            status=PredictionStatus.OK,
             precision_curve=curve,
         )
         assert result.precision_at_n(1) == curve[0]
