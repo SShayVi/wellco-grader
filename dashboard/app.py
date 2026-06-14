@@ -66,17 +66,60 @@ with st.sidebar:
     st.caption(f"Auto-refreshes every {settings.refresh_interval_seconds}s")
     st.divider()
 
-    n_slider = st.slider(
+    if "outreach_n" not in st.session_state:
+        st.session_state.outreach_n = 1_000
+
+    def _on_slider():
+        st.session_state.outreach_n = st.session_state._n_slider
+        st.session_state._n_input = st.session_state._n_slider
+
+    def _on_input():
+        val = max(1, min(10_000, int(st.session_state._n_input)))
+        st.session_state.outreach_n = val
+        st.session_state._n_slider = val
+
+    st.slider(
         "Outreach N",
         min_value=1,
         max_value=10_000,
-        value=1_000,
+        value=st.session_state.outreach_n,
         step=50,
+        key="_n_slider",
+        on_change=_on_slider,
         help="Adjust N to see how leaderboard rankings change",
     )
+    st.number_input(
+        "Or type N",
+        min_value=1,
+        max_value=10_000,
+        value=st.session_state.outreach_n,
+        step=1,
+        key="_n_input",
+        on_change=_on_input,
+    )
+    n_slider = st.session_state.outreach_n
 
     show_baseline = st.checkbox("Show random baseline", value=True)
     show_only_ok = st.checkbox("Show only valid submissions", value=False)
+
+    st.divider()
+    if "rec_n_overrides" not in st.session_state:
+        st.session_state.rec_n_overrides = {}
+
+    with st.expander("Edit Rec. N per candidate"):
+        for r in results:
+            default = st.session_state.rec_n_overrides.get(
+                r.candidate_name, r.recommended_n or 1_000
+            )
+            max_n = len(r.precision_curve) if r.precision_curve else 10_000
+            st.session_state.rec_n_overrides[r.candidate_name] = st.number_input(
+                r.candidate_name,
+                min_value=1,
+                max_value=max(max_n, 1),
+                value=int(default),
+                step=1,
+                key=f"rec_n_{r.candidate_name}",
+            )
 
     st.divider()
     st.metric("Total candidates", len(results))
@@ -96,11 +139,16 @@ _STATUS_ICON = {
 }
 
 
+def _effective_rec_n(r: CandidateResult) -> int | None:
+    return st.session_state.rec_n_overrides.get(r.candidate_name, r.recommended_n)
+
+
 def _build_leaderboard(results: list[CandidateResult], n: int) -> pd.DataFrame:
     rows = []
     for r in results:
         p_at_n = r.precision_at_n(n)
-        p_at_rec = r.precision_at_recommended_n
+        rec_n = _effective_rec_n(r)
+        p_at_rec = r.precision_at_n(rec_n) if rec_n is not None else None
         rows.append(
             {
                 "": _STATUS_ICON.get(r.status, "❓"),
@@ -108,7 +156,7 @@ def _build_leaderboard(results: list[CandidateResult], n: int) -> pd.DataFrame:
                 f"Precision@{n:,}": f"{p_at_n:.3f}" if p_at_n is not None else "—",
                 "_sort": p_at_n if p_at_n is not None else -1,
                 f"Precision@Rec.N": f"{p_at_rec:.3f}" if p_at_rec is not None else "—",
-                "Rec. N": r.recommended_n,
+                "Rec. N": rec_n,
                 "Status": r.status.value,
             }
         )
@@ -180,12 +228,13 @@ else:
         )
 
         # Mark recommended N
-        if r.recommended_n and 1 <= r.recommended_n <= len(curve):
+        rec_n = _effective_rec_n(r)
+        if rec_n and 1 <= rec_n <= len(curve):
             fig.add_vline(
-                x=r.recommended_n,
+                x=rec_n,
                 line=dict(color=color, width=1, dash="dot"),
                 opacity=0.5,
-                annotation_text=f"{r.candidate_name} N={r.recommended_n:,}",
+                annotation_text=f"{r.candidate_name} N={rec_n:,}",
                 annotation_position="top left",
                 annotation_font_size=10,
             )

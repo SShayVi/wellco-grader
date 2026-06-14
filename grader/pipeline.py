@@ -177,12 +177,17 @@ def _download_csv(url: str) -> bytes:
 
 
 def _normalize_url(url: str) -> str:
-    """Convert Google Drive sharing URLs to direct download URLs."""
-    # https://drive.google.com/file/d/{ID}/view?...
+    """Convert sharing URLs to direct download URLs."""
+    # GitHub blob view → raw
+    # https://github.com/{owner}/{repo}/blob/{branch}/{path}
+    m = re.match(r"https://github\.com/([^/]+/[^/]+)/blob/(.+)", url)
+    if m:
+        return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}"
+    # Google Drive: https://drive.google.com/file/d/{ID}/view?...
     m = re.match(r"https://drive\.google\.com/file/d/([^/?]+)", url)
     if m:
         return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
-    # https://drive.google.com/open?id={ID}
+    # Google Drive: https://drive.google.com/open?id={ID}
     m = re.search(r"[?&]id=([^&]+)", url)
     if m and "drive.google.com" in url:
         return f"https://drive.google.com/uc?export=download&id={m.group(1)}"
