@@ -51,16 +51,30 @@ def get_cache() -> ResultCache:
 
 @st.cache_resource
 def get_scorer():
-    """Return a Scorer, or None if true labels are unavailable."""
-    import tempfile, os
+    """Return a (Scorer, error_msg) tuple. error_msg is None on success."""
+    import base64, os, tempfile
 
-    # 1. Local file (dev / local run)
+    # 1. Local file
     try:
-        return Scorer(settings.true_labels_path)
+        return Scorer(settings.true_labels_path), None
     except FileNotFoundError:
         pass
 
-    # 2. Streamlit Cloud secret: TRUE_LABELS_CSV (raw CSV text)
+    # 2. Streamlit Cloud secret: TRUE_LABELS_CSV_B64 (base64-encoded CSV bytes)
+    try:
+        b64 = st.secrets.get("TRUE_LABELS_CSV_B64")
+        if b64:
+            raw = base64.b64decode(b64)
+            tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+            tmp.write(raw)
+            tmp.close()
+            scorer = Scorer(tmp.name)
+            os.unlink(tmp.name)
+            return scorer, None
+    except Exception as e:
+        return None, f"Secret TRUE_LABELS_CSV_B64 found but failed to load: {e}"
+
+    # 3. Streamlit Cloud secret: TRUE_LABELS_CSV (raw CSV text)
     try:
         csv_text = st.secrets.get("TRUE_LABELS_CSV")
         if csv_text:
@@ -71,11 +85,11 @@ def get_scorer():
             tmp.close()
             scorer = Scorer(tmp.name)
             os.unlink(tmp.name)
-            return scorer
-    except Exception:
-        pass
+            return scorer, None
+    except Exception as e:
+        return None, f"Secret TRUE_LABELS_CSV found but failed to load: {e}"
 
-    return None
+    return None, None
 
 
 def load_results() -> list[CandidateResult]:
@@ -85,7 +99,7 @@ def load_results() -> list[CandidateResult]:
 _DEFAULT_BASELINE = 0.2004  # 2004 churners / 10000 members
 
 results = load_results()
-scorer = get_scorer()
+scorer, _scorer_error = get_scorer()
 baseline = scorer.baseline_precision if scorer else _DEFAULT_BASELINE
 
 # ---------------------------------------------------------------------------
@@ -95,6 +109,8 @@ with st.sidebar:
     st.title("WellCo Grader")
     st.caption(f"Auto-refreshes every {settings.refresh_interval_seconds}s")
 
+    if _scorer_error:
+        st.error(_scorer_error)
     if scorer is not None and st.button("Run Grader", type="primary", use_container_width=True):
         with st.spinner("Fetching candidates and scoring..."):
             try:
