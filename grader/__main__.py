@@ -4,13 +4,61 @@ CLI entry point: python -m grader
 Usage:
   python -m grader                                                    # reads from Google Sheet
   python -m grader --candidate "Name" https://url/to/file.csv 1000  # single candidate
+  python -m grader validate https://url/to/file.csv                  # validate a CSV only
 """
 import argparse
 import sys
 
+import requests
+
 from config.settings import Settings
 from grader.pipeline import run_pipeline
+from grader.pipeline import _normalize_url
 from grader.storage.models import PredictionStatus
+from grader.validation import validate_and_standardize
+
+
+def _run_validate(target: str) -> None:
+    if not target:
+        print("Usage: python -m grader validate <CSV_URL_or_PATH>", file=sys.stderr)
+        sys.exit(1)
+
+    # Load true labels for overlap check (optional — skip if not configured)
+    true_member_ids = None
+    try:
+        settings = Settings()
+        import pandas as pd
+        labels = pd.read_csv(settings.true_labels_path)
+        true_member_ids = set(labels["member_id"].astype(int))
+    except Exception:
+        print("[INFO] True labels not found — overlap check skipped.\n")
+
+    # Download or read CSV
+    try:
+        if target.startswith("http"):
+            url = _normalize_url(target)
+            resp = requests.get(url, timeout=60, allow_redirects=True)
+            resp.raise_for_status()
+            raw = resp.content
+        else:
+            with open(target, "rb") as f:
+                raw = f.read()
+    except Exception as exc:
+        print(f"[ERROR] Could not fetch CSV: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    result = validate_and_standardize(raw, true_member_ids=true_member_ids)
+
+    print(result.summary())
+    print()
+    if result.ok:
+        print(f"✓ Validation passed. {result.row_count:,} members, ready to submit.")
+        if result.standardized is not None:
+            print("\nStandardised preview (first 5 rows):")
+            print(result.standardized.head().to_string(index=False))
+    else:
+        print("✗ Validation failed — fix the errors above before submitting.")
+        sys.exit(1)
 
 
 def main() -> None:
@@ -21,7 +69,23 @@ def main() -> None:
         metavar=("NAME", "CSV_URL", "RECOMMENDED_N"),
         help="Process a single candidate without reading the Google Sheet",
     )
+    parser.add_argument(
+        "validate",
+        nargs="?",
+        metavar="validate",
+        help="Subcommand: validate a CSV file or URL",
+    )
+    parser.add_argument(
+        "csv_target",
+        nargs="?",
+        metavar="CSV_URL_OR_PATH",
+        help="URL or local path for the 'validate' subcommand",
+    )
     args = parser.parse_args()
+
+    if args.validate == "validate":
+        _run_validate(args.csv_target)
+        return
 
     try:
         settings = Settings()
