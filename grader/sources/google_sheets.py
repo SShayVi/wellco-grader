@@ -25,14 +25,16 @@ def fetch_candidates(sheet_id: str) -> list[dict]:
     df = pd.read_csv(StringIO(response.text))
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    required = {"candidate_name", "csv_url", "recommended_n"}
-    missing = required - set(df.columns)
+    # Flexible column matching — sheet column names may vary
+    col_map = _find_columns(df.columns.tolist())
+    missing = [k for k, v in col_map.items() if v is None]
     if missing:
         raise ValueError(
-            f"Google Sheet is missing required columns: {missing}. "
+            f"Google Sheet is missing columns for: {missing}. "
             f"Found: {list(df.columns)}"
         )
 
+    df = df.rename(columns={col_map[k]: k for k in col_map})
     df = df[["candidate_name", "csv_url", "recommended_n"]].dropna(subset=["candidate_name", "csv_url"])
     df["candidate_name"] = df["candidate_name"].str.strip()
     df["csv_url"] = df["csv_url"].str.strip()
@@ -44,3 +46,24 @@ def fetch_candidates(sheet_id: str) -> list[dict]:
     candidates = df.to_dict("records")
     logger.info("Found %d candidates", len(candidates))
     return candidates
+
+
+def _find_columns(columns: list) -> dict:
+    """
+    Fuzzy-match sheet columns to the required logical names.
+    Handles variations like 'test_csv_url', 'recommended_N', 'Candidate Name', etc.
+    """
+    lower = {c.lower().replace(" ", "_"): c for c in columns}
+
+    def find(patterns):
+        for p in patterns:
+            for k, orig in lower.items():
+                if p in k:
+                    return orig
+        return None
+
+    return {
+        "candidate_name": find(["candidate_name", "candidate", "name"]),
+        "csv_url":        find(["csv_url", "csv", "url", "link"]),
+        "recommended_n":  find(["recommended_n", "recommended", "_n", "outreach_n", "n_outreach"]),
+    }
