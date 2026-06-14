@@ -15,12 +15,15 @@ from streamlit_autorefresh import st_autorefresh
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import requests
+
 from config.settings import Settings
-from grader.pipeline import run_pipeline
+from grader.pipeline import _normalize_url, run_pipeline
 from grader.scoring.metrics import random_baseline_precision
 from grader.scoring.scorer import Scorer
 from grader.storage.cache import ResultCache
 from grader.storage.models import CandidateResult, PredictionStatus
+from grader.validation import Severity, validate_and_standardize
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -461,3 +464,53 @@ else:
             margin=dict(l=60, r=200, t=60, b=40),
         )
         st.plotly_chart(fig_ov, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Section 4: Validate a Submission
+# ---------------------------------------------------------------------------
+st.header("Validate a Submission")
+st.caption("Paste a CSV URL to check it before (or after) adding it to the sheet.")
+
+csv_url_input = st.text_input(
+    "CSV URL",
+    placeholder="https://github.com/.../predictions.csv",
+    label_visibility="collapsed",
+)
+
+if st.button("Validate", type="secondary"):
+    if not csv_url_input.strip():
+        st.warning("Enter a URL first.")
+    else:
+        with st.spinner("Downloading and validating…"):
+            try:
+                url = _normalize_url(csv_url_input.strip())
+                resp = requests.get(url, timeout=60, allow_redirects=True)
+                resp.raise_for_status()
+                raw = resp.content
+            except Exception as exc:
+                st.error(f"Could not download CSV: {exc}")
+                raw = None
+
+        if raw is not None:
+            vr = validate_and_standardize(
+                raw,
+                true_member_ids=scorer.true_member_ids,
+                min_overlap=settings.min_member_id_overlap,
+            )
+
+            if vr.ok:
+                st.success(f"Validation passed — {vr.row_count:,} members, overlap {vr.overlap_pct:.1%}")
+            else:
+                st.error("Validation failed")
+
+            for issue in vr.issues:
+                if issue.severity == Severity.ERROR:
+                    st.error(f"**{issue.code}** — {issue.message}")
+                elif issue.severity == Severity.WARNING:
+                    st.warning(f"**{issue.code}** — {issue.message}")
+                else:
+                    st.info(f"**{issue.code}** — {issue.message}")
+
+            if vr.standardized is not None:
+                with st.expander("Preview standardised data (top 10 rows)"):
+                    st.dataframe(vr.standardized.head(10), use_container_width=True)
