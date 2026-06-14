@@ -21,11 +21,22 @@ from grader.storage.models import CandidateResult, PredictionStatus
 
 logger = logging.getLogger(__name__)
 
-_MEMBER_ID_HINTS = ["member_id", "memberid", "member", "id", "user_id", "userid", "user"]
-_SCORE_HINTS = [
-    "score", "churn_score", "churn_prob", "churn_probability", "probability",
-    "prob", "risk", "risk_score", "pred", "prediction",
+_MEMBER_ID_HINTS = [
+    "member_id", "memberid", "member", "id", "user_id", "userid", "user",
+    "customer_id", "client_id", "patient_id", "account_id",
 ]
+# Ordered by preference: uplift/CATE → explicit priority → churn prob → generic → rank (inverted)
+_SCORE_HINTS = [
+    "weighted_uplift", "uplift", "cate", "cate_estimate", "cate_score",
+    "benefit_score",
+    "propensity_score", "propensity", "priority_score", "prioritization_score",
+    "churn_score", "churn_prob", "churn_probability",
+    "churn_prob_no_outreach", "p_churn_no_outreach", "baseline_churn_proba",
+    "score", "probability", "prob", "risk", "risk_score", "pred", "prediction",
+    "rank",
+]
+# Score columns that represent rank (1 = best) — values are negated before sorting
+_RANK_HINTS = {"rank", "ranking", "position"}
 
 
 def run_pipeline(
@@ -126,6 +137,8 @@ def _process_candidate(
     out = pd.DataFrame()
     out["member_id"] = pd.to_numeric(df[mapping["member_id_col"]], errors="coerce").astype("Int64")
     out["score"] = pd.to_numeric(df[mapping["score_col"]], errors="coerce")
+    if mapping.get("invert_score"):
+        out["score"] = -out["score"]  # rank 1 → -1 sorts first when descending
     out = out.dropna(subset=["member_id", "score"])
     out = out.sort_values("score", ascending=False).reset_index(drop=True)
 
@@ -197,13 +210,53 @@ def _normalize_url(url: str) -> str:
 
 
 def _map_columns(df: pd.DataFrame) -> Optional[dict]:
-    """Heuristic column mapper: find member_id and score columns by name."""
+    """Heuristic column mapper: exact match → substring match → 2-column dtype fallback."""
     lower = {c.lower().strip(): c for c in df.columns}
+
+    # 1. Exact match
     member_col = next((lower[k] for k in _MEMBER_ID_HINTS if k in lower), None)
     score_col = next((lower[k] for k in _SCORE_HINTS if k in lower), None)
+
+    # 2. Substring match (hint contained in col name or col name contained in hint)
+    if member_col is None:
+        for col_l, col_orig in lower.items():
+            if any(hint in col_l or col_l in hint for hint in _MEMBER_ID_HINTS):
+                member_col = col_orig
+                break
+    if score_col is None:
+        for hint in _SCORE_HINTS:  # preserve priority order
+            for col_l, col_orig in lower.items():
+                if col_orig == member_col:
+                    continue
+                if hint in col_l or col_l in hint:
+                    score_col = col_orig
+                    break
+            if score_col:
+                break
+
+    # 3. Two-column dtype fallback: one int-like (IDs), one float-like (scores)
+    if member_col is None or score_col is None:
+        num_cols = [
+            c for c in df.columns
+            if pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.8
+        ]
+        if len(num_cols) >= 2 and member_col is None and score_col is None:
+            c1, c2 = num_cols[0], num_cols[1]
+            c2_01 = pd.to_numeric(df[c2], errors="coerce").between(0, 1).mean() > 0.5
+            c1_01 = pd.to_numeric(df[c1], errors="coerce").between(0, 1).mean() > 0.5
+            if c2_01 and not c1_01:
+                member_col, score_col = c1, c2
+            elif c1_01 and not c2_01:
+                member_col, score_col = c2, c1
+            else:
+                member_col, score_col = c1, c2  # best guess
+
     if member_col and score_col:
-        logger.debug("Column mapping: member_id=%s, score=%s", member_col, score_col)
-        return {"member_id_col": member_col, "score_col": score_col}
+        invert = score_col.lower().strip() in _RANK_HINTS or any(
+            r in score_col.lower() for r in _RANK_HINTS
+        )
+        logger.debug("Column mapping: member_id=%s, score=%s, invert=%s", member_col, score_col, invert)
+        return {"member_id_col": member_col, "score_col": score_col, "invert_score": invert}
     return None
 
 
