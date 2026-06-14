@@ -19,8 +19,10 @@ env/
 
 # Project data (true labels must not be public)
 data/
-.cache/
 test_churn_labels.csv
+# Cache: ignore everything except the grader DB (pre-computed scores ship with the app)
+.cache/*
+!.cache/grader.db
 
 # IDE
 .idea/

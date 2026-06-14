@@ -50,17 +50,43 @@ def get_cache() -> ResultCache:
 
 
 @st.cache_resource
-def get_scorer() -> Scorer:
-    return Scorer(settings.true_labels_path)
+def get_scorer():
+    """Return a Scorer, or None if true labels are unavailable."""
+    import tempfile, os
+
+    # 1. Local file (dev / local run)
+    try:
+        return Scorer(settings.true_labels_path)
+    except FileNotFoundError:
+        pass
+
+    # 2. Streamlit Cloud secret: TRUE_LABELS_CSV (raw CSV text)
+    try:
+        csv_text = st.secrets.get("TRUE_LABELS_CSV")
+        if csv_text:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".csv", delete=False, encoding="utf-8"
+            )
+            tmp.write(csv_text)
+            tmp.close()
+            scorer = Scorer(tmp.name)
+            os.unlink(tmp.name)
+            return scorer
+    except Exception:
+        pass
+
+    return None
 
 
 def load_results() -> list[CandidateResult]:
     return get_cache().get_all_latest()
 
 
+_DEFAULT_BASELINE = 0.2004  # 2004 churners / 10000 members
+
 results = load_results()
 scorer = get_scorer()
-baseline = scorer.baseline_precision
+baseline = scorer.baseline_precision if scorer else _DEFAULT_BASELINE
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -69,7 +95,9 @@ with st.sidebar:
     st.title("WellCo Grader")
     st.caption(f"Auto-refreshes every {settings.refresh_interval_seconds}s")
 
-    if st.button("Run Grader", type="primary", use_container_width=True):
+    if scorer is None:
+        st.info("Read-only mode — true labels not available. Run the grader locally to update scores.")
+    elif st.button("Run Grader", type="primary", use_container_width=True):
         with st.spinner("Fetching candidates and scoring..."):
             try:
                 run_results = run_pipeline(settings)
