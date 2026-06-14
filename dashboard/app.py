@@ -16,6 +16,7 @@ from streamlit_autorefresh import st_autorefresh
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import Settings
+from grader.pipeline import run_pipeline
 from grader.scoring.metrics import random_baseline_precision
 from grader.scoring.scorer import Scorer
 from grader.storage.cache import ResultCache
@@ -64,6 +65,18 @@ baseline = scorer.baseline_precision
 with st.sidebar:
     st.title("WellCo Grader")
     st.caption(f"Auto-refreshes every {settings.refresh_interval_seconds}s")
+
+    if st.button("Run Grader", type="primary", use_container_width=True):
+        with st.spinner("Fetching candidates and scoring..."):
+            try:
+                run_results = run_pipeline(settings)
+                get_cache.clear()
+                ok = sum(1 for r in run_results if r.status == PredictionStatus.OK)
+                st.success(f"Done — {ok}/{len(run_results)} OK")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Pipeline error: {e}")
+
     st.divider()
 
     if "outreach_n" not in st.session_state:
