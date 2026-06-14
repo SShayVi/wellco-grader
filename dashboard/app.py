@@ -376,3 +376,78 @@ else:
                 margin=dict(l=60, r=40, t=60, b=60),
             )
             st.plotly_chart(fig_excl, use_container_width=True)
+
+        # --- Overlap % over N line chart ---
+        pairs = [
+            (names[i], names[j])
+            for i in range(len(names))
+            for j in range(i + 1, len(names))
+        ]
+
+        # Build per-pair overlap curves once, cache by selected candidate set
+        cache_key = "overlap_curves|" + "|".join(sorted(names))
+        if cache_key not in st.session_state:
+            ranked = {r.candidate_name: r.ranked_member_ids for r in sel}
+            curves = {}
+            for a_name, b_name in pairs:
+                ra, rb = ranked[a_name], ranked[b_name]
+                max_n = min(len(ra), len(rb))
+                set_a, set_b = set(), set()
+                shared = 0
+                pct_curve = []
+                for i in range(max_n):
+                    ai, bi = ra[i], rb[i]
+                    if ai == bi:
+                        shared += 1
+                    else:
+                        if ai in set_b:
+                            shared += 1
+                        if bi in set_a:
+                            shared += 1
+                    set_a.add(ai)
+                    set_b.add(bi)
+                    pct_curve.append(shared / (i + 1) * 100)
+                curves[(a_name, b_name)] = pct_curve
+            st.session_state[cache_key] = curves
+        else:
+            curves = st.session_state[cache_key]
+
+        pair_colors = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+            "#9467bd", "#8c564b", "#e377c2", "#17becf",
+        ]
+        fig_ov = go.Figure()
+        for idx, (a_name, b_name) in enumerate(pairs):
+            pct_curve = curves[(a_name, b_name)]
+            xs = list(range(1, len(pct_curve) + 1))
+            color = pair_colors[idx % len(pair_colors)]
+            fig_ov.add_trace(go.Scatter(
+                x=xs,
+                y=pct_curve,
+                mode="lines",
+                name=f"{a_name} vs {b_name}",
+                line=dict(color=color, width=2),
+                hovertemplate=(
+                    f"<b>{a_name} vs {b_name}</b><br>"
+                    "N=%{x:,}<br>"
+                    "Overlap=%{y:.1f}%<extra></extra>"
+                ),
+            ))
+
+        fig_ov.add_vline(
+            x=n_slider,
+            line=dict(color="black", width=2, dash="solid"),
+            annotation_text=f"N={n_slider:,}",
+            annotation_position="top right",
+        )
+        fig_ov.update_layout(
+            title="Pairwise overlap % over N",
+            xaxis_title="N (outreach size)",
+            yaxis_title="Overlap %",
+            yaxis=dict(range=[0, 100]),
+            legend=dict(orientation="v", x=1.02, y=1),
+            hovermode="x unified",
+            height=400,
+            margin=dict(l=60, r=200, t=60, b=40),
+        )
+        st.plotly_chart(fig_ov, use_container_width=True)
