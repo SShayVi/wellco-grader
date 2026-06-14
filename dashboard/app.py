@@ -475,6 +475,50 @@ else:
         )
         st.plotly_chart(fig_ov, use_container_width=True)
 
+        # --- Score distribution ---
+        sel_with_scores = [r for r in sel if r.ranked_scores]
+        if not sel_with_scores:
+            st.info("Score distribution unavailable — re-run `python -m grader` to populate scores.")
+        else:
+            st.subheader("Score Distribution")
+            standardize = st.checkbox(
+                "Standardise scores (0–1 scale)",
+                value=False,
+                help="Apply min-max normalisation per candidate so all curves share the same axis.",
+            )
+
+            fig_dist = go.Figure()
+            for idx, r in enumerate(sel_with_scores):
+                scores = r.ranked_scores
+                if standardize:
+                    lo, hi = min(scores), max(scores)
+                    scores = [(s - lo) / (hi - lo) if hi > lo else 0.5 for s in scores]
+
+                color = pair_colors[idx % len(pair_colors)]
+                fig_dist.add_trace(go.Histogram(
+                    x=scores,
+                    name=r.candidate_name,
+                    opacity=0.55,
+                    nbinsx=60,
+                    histnorm="probability density",
+                    marker_color=color,
+                    hovertemplate=(
+                        f"<b>{r.candidate_name}</b><br>"
+                        "Score=%{x:.3f}<br>"
+                        "Density=%{y:.4f}<extra></extra>"
+                    ),
+                ))
+
+            fig_dist.update_layout(
+                barmode="overlay",
+                xaxis_title="Score (standardised 0–1)" if standardize else "Score",
+                yaxis_title="Density",
+                legend=dict(orientation="v", x=1.02, y=1),
+                height=380,
+                margin=dict(l=60, r=180, t=40, b=40),
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
+
 # ---------------------------------------------------------------------------
 # Section 4: Validate a Submission
 # ---------------------------------------------------------------------------

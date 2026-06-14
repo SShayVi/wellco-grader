@@ -192,6 +192,18 @@ Add `qini_at_n()` in `metrics.py` and register it in `Scorer` (accepts `metric: 
 - Horizontal dashed line for random baseline.
 - Current slider N shown as a solid black vertical line.
 
+**Section 3 — Candidate Overlap**
+- Multiselect to choose which candidates to compare.
+- **Pairwise heatmap**: overlap % at current slider N for every pair.
+- **Exclusivity bar**: fraction of each candidate's top-N that is unique (not in any other selected candidate's top-N).
+- **Overlap-over-N line chart**: pairwise overlap % (Y) vs N (X), one colored line per pair. O(N) incremental algorithm; results cached in session state.
+- **Score distribution histogram**: one semi-transparent histogram per candidate, using `probability density` normalization and 60 bins. Controlled by the same candidate multiselect. Optional "Standardise scores (0–1 scale)" checkbox applies min-max normalization before plotting so candidates with different score ranges can be compared visually. `ranked_scores` is stored in SQLite alongside `ranked_member_ids`.
+
+**Section 4 — Validate a Submission**
+- URL text input + Validate button.
+- Runs `validate_and_standardize` and shows per-issue callouts (ERROR = red, WARNING = orange, INFO = blue).
+- Shows a preview of the standardised output on success.
+
 **Auto-refresh**: polls SQLite every 60 seconds.
 
 **Deployment**:

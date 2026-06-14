@@ -19,6 +19,7 @@ class CandidateResult(BaseModel):
     status: PredictionStatus = PredictionStatus.CSV_DOWNLOAD_ERROR
     precision_curve: Optional[list[float]] = None  # precision@N for N=1..len(predictions)
     ranked_member_ids: Optional[list] = None       # member_ids sorted by score desc
+    ranked_scores: Optional[list] = None           # corresponding scores (same order)
     member_id_overlap: Optional[float] = None
     error: Optional[str] = None   # set on any non-OK status
     notes: Optional[str] = None   # informational (e.g. "Rec. N defaulted to 1,000")

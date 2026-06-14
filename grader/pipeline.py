@@ -125,12 +125,13 @@ def _process_candidate(
     status = PredictionStatus.DEGENERATE_PREDICTIONS if has_degenerate else PredictionStatus.OK
     precision_curve = scorer.score(out)
     ranked_ids = out["member_id"].astype(int).tolist()
+    ranked_scores = out["score"].tolist()
 
     result = CandidateResult(
         candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
         content_hash=content_hash, status=status,
         precision_curve=precision_curve, ranked_member_ids=ranked_ids,
-        member_id_overlap=vr.overlap_pct,
+        ranked_scores=ranked_scores, member_id_overlap=vr.overlap_pct,
         notes=notes,
     )
     cache.put(result)
