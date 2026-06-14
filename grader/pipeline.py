@@ -123,20 +123,29 @@ def _process_candidate(
     # Step 7: score
     has_degenerate = any(i.code == "DEGENERATE_SCORES" for i in vr.issues)
     status = PredictionStatus.DEGENERATE_PREDICTIONS if has_degenerate else PredictionStatus.OK
-    precision_curve = scorer.score(out)
+    curves = scorer.score_all(out)
     ranked_ids = out["member_id"].astype(int).tolist()
     ranked_scores = out["score"].tolist()
 
     result = CandidateResult(
         candidate_name=name, csv_url=csv_url, recommended_n=recommended_n,
         content_hash=content_hash, status=status,
-        precision_curve=precision_curve, ranked_member_ids=ranked_ids,
+        precision_curve=curves.get("precision"),
+        gain_curve=curves.get("gain"),
+        lift_curve=curves.get("lift"),
+        qini_curve=curves.get("qini"),
+        ranked_member_ids=ranked_ids,
         ranked_scores=ranked_scores, member_id_overlap=vr.overlap_pct,
         notes=notes,
     )
     cache.put(result)
-    logger.info("%s — %s, precision@%d=%.3f", name, status.value, recommended_n,
-                result.precision_at_recommended_n or 0)
+    logger.info(
+        "%s — %s, precision@%d=%.3f, gain@%d=%.3f, lift@%d=%.2f",
+        name, status.value,
+        recommended_n, result.precision_at_n(recommended_n) or 0,
+        recommended_n, result.gain_at_n(recommended_n) or 0,
+        recommended_n, result.lift_at_n(recommended_n) or 0,
+    )
     return result
 
 

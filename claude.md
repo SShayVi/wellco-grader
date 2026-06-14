@@ -161,36 +161,64 @@ For each candidate:
 
 ## Scoring
 
-### precision_at_n (primary metric)
+All four metrics are computed as full curves (one value per N from 1 to len(predictions))
+and stored in SQLite. The dashboard slices any curve at the slider's N — no recomputation.
 
+### precision@N (primary metric)
 ```
-precision@N = |top_N_by_score ∩ true_churners| / N
+precision@N = |top_N ∩ churners| / N
 ```
 
-- Computed for every N from 1 to len(predictions) and stored as a list in SQLite.
-- Dashboard slices the stored curve at any N via slider — no recomputation.
-- `true_churners`: member_ids where `churn == 1` in `test_churn_labels.csv`.
+### gain@N (cumulative recall)
+```
+gain@N = |top_N ∩ churners| / total_churners
+```
+Fraction of all churners captured. Random baseline: diagonal line `N / total_population`.
 
-### TODO: Uplift-Aware Metric
+### lift@N (relative to random)
+```
+lift@N = precision@N / churn_rate
+```
+How many times better than a random ranker. Random baseline: 1.0 (constant).
 
-The `outreach` column in `test_churn_labels.csv` records who was actually outreached.
-Add `qini_at_n()` in `metrics.py` and register it in `Scorer` (accepts `metric: str`).
+### qini@N (uplift-aware)
+```
+qini@N = (treated_churners_in_topN / N_T) - (control_churners_in_topN / N_C)
+```
+- `treated` = `outreach == 1`; `control` = `outreach == 0`; `N_T`, `N_C` = total treatment/control sizes.
+- Positive ⟹ model surfaces treated churners disproportionately vs. control churners.
+- Random baseline: 0.0 (constant).
+- Requires `outreach` column in `test_churn_labels.csv`.
+
+### Implementation
+
+- `grader/scoring/metrics.py` — `precision_curve`, `gain_curve`, `lift_curve`, `qini_curve` (all O(N))
+- `grader/scoring/scorer.py` — `Scorer.score_all(df)` returns `{precision, gain, lift, qini}` dicts;
+  `Scorer.fill_curves(result)` backfills missing curves on old cached results (gain/lift derived
+  analytically from precision_curve; qini recomputed from ranked_member_ids)
+- `grader/storage/models.py` — `CandidateResult` stores all four curves;
+  `precision_at_n`, `gain_at_n`, `lift_at_n`, `qini_at_n` helper methods
 
 ---
 
 ## Dashboard (`dashboard/app.py`)
 
-**Sidebar**: N slider (1–10,000), baseline toggle, valid-only filter, summary metrics.
+**Sidebar**: N slider (1–10,000), metric selector (Precision / Gain / Lift / Qini), baseline
+toggle, valid-only filter, summary metrics.
 
 **Section 1 — Leaderboard**
-- Columns: status icon | Candidate | Precision@N (slider) | Precision@Rec.N | Rec. N | Status
-- Sorted by Precision@N descending. Updates live on slider move.
+- Columns: status icon | Candidate | `{metric}@{N}` (slider) | `{metric}@Rec.N` | Rec. N | Status
+- Sorted by selected metric@N descending. Updates live on slider or metric change.
+- Metric display formats: Precision (3 dp) · Gain (%) · Lift (×) · Qini (4 dp).
 
-**Section 2 — Precision@N Chart**
-- One line per candidate. X = N, Y = precision@N.
+**Section 2 — Metric Chart**
+- Title and Y-axis update to match the selected metric.
+- One line per candidate. X = N, Y = selected metric value.
 - Dotted vertical line at each candidate's recommended N.
-- Horizontal dashed line for random baseline.
+- Random baseline: precision → horizontal at churn_rate; gain → diagonal N/total_pop;
+  lift → horizontal at 1.0; qini → horizontal at 0.
 - Current slider N shown as a solid black vertical line.
+- Old cached results (missing gain/lift/qini) are filled in automatically via `scorer.fill_curves()`.
 
 **Section 3 — Candidate Overlap**
 - Multiselect to choose which candidates to compare.

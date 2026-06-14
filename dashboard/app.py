@@ -2,11 +2,14 @@
 WellCo Grader Dashboard
 
 Sections:
-  1. Leaderboard — sortable by precision@N (N from slider)
-  2. Precision@N Chart — one line per candidate over all N
+  1. Leaderboard — sortable by selected metric@N (N from slider)
+  2. Metric Chart  — one line per candidate over all N (metric selected in sidebar)
+  3. Candidate Overlap
+  4. Validate a Submission
 """
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -102,6 +105,11 @@ results = load_results()
 scorer, _scorer_error = get_scorer()
 baseline = scorer.baseline_precision if scorer else _DEFAULT_BASELINE
 
+# Fill in gain/lift/qini curves for results cached before these metrics existed.
+if scorer:
+    for r in results:
+        scorer.fill_curves(r)
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
@@ -166,6 +174,20 @@ with st.sidebar:
     )
     n_slider = st.session_state.outreach_n
 
+    st.divider()
+
+    metric_choice = st.selectbox(
+        "Leaderboard & chart metric",
+        options=["Precision", "Gain", "Lift", "Qini"],
+        index=0,
+        help=(
+            "Precision@N — fraction of top-N that are churners\n"
+            "Gain@N — fraction of all churners captured in top-N\n"
+            "Lift@N — how many times better than random\n"
+            "Qini@N — uplift-aware (outreach-adjusted)"
+        ),
+    )
+
     show_baseline = st.checkbox("Show random baseline", value=True)
     show_only_ok = st.checkbox("Show only valid submissions", value=False)
 
@@ -205,6 +227,44 @@ _STATUS_ICON = {
     PredictionStatus.CSV_DOWNLOAD_ERROR: "⚫",
 }
 
+_METRIC_LABELS = {
+    "Precision": "Precision",
+    "Gain": "Gain",
+    "Lift": "Lift",
+    "Qini": "Qini",
+}
+
+_METRIC_FMT = {
+    "Precision": lambda v: f"{v:.3f}",
+    "Gain": lambda v: f"{v:.1%}",
+    "Lift": lambda v: f"{v:.2f}x",
+    "Qini": lambda v: f"{v:.4f}",
+}
+
+
+def _metric_at_n(r: CandidateResult, metric: str, n: int) -> Optional[float]:
+    if metric == "Precision":
+        return r.precision_at_n(n)
+    if metric == "Gain":
+        return r.gain_at_n(n)
+    if metric == "Lift":
+        return r.lift_at_n(n)
+    if metric == "Qini":
+        return r.qini_at_n(n)
+    return None
+
+
+def _metric_curve(r: CandidateResult, metric: str) -> Optional[list[float]]:
+    if metric == "Precision":
+        return r.precision_curve
+    if metric == "Gain":
+        return r.gain_curve
+    if metric == "Lift":
+        return r.lift_curve
+    if metric == "Qini":
+        return r.qini_curve
+    return None
+
 
 def _effective_rec_n(r: CandidateResult):
     return st.session_state.rec_n_overrides.get(r.candidate_name, r.recommended_n)
@@ -220,19 +280,26 @@ def _status_label(r: CandidateResult) -> str:
     return ""
 
 
-def _build_leaderboard(results: list[CandidateResult], n: int) -> pd.DataFrame:
+def _fmt(value, metric: str) -> str:
+    if value is None:
+        return "—"
+    return _METRIC_FMT[metric](value)
+
+
+def _build_leaderboard(results: list[CandidateResult], n: int, metric: str) -> pd.DataFrame:
+    fmt = _METRIC_FMT[metric]
     rows = []
     for r in results:
-        p_at_n = r.precision_at_n(n)
+        val_n = _metric_at_n(r, metric, n)
         rec_n = _effective_rec_n(r)
-        p_at_rec = r.precision_at_n(rec_n) if rec_n is not None else None
+        val_rec = _metric_at_n(r, metric, rec_n) if rec_n is not None else None
         rows.append(
             {
                 "": _STATUS_ICON.get(r.status, "❓"),
                 "Candidate": r.candidate_name,
-                f"Precision@{n:,}": f"{p_at_n:.3f}" if p_at_n is not None else "—",
-                "_sort": p_at_n if p_at_n is not None else -1,
-                "Precision@Rec.N": f"{p_at_rec:.3f}" if p_at_rec is not None else "—",
+                f"{metric}@{n:,}": _fmt(val_n, metric),
+                "_sort": val_n if val_n is not None else -999,
+                f"{metric}@Rec.N": _fmt(val_rec, metric),
                 "Rec. N": rec_n,
                 "Status": _status_label(r),
                 "_status_code": r.status.value,
@@ -251,12 +318,12 @@ def _build_leaderboard(results: list[CandidateResult], n: int) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Section 1: Leaderboard
 # ---------------------------------------------------------------------------
-st.header(f"Leaderboard — Precision @ N={n_slider:,}")
+st.header(f"Leaderboard — {metric_choice} @ N={n_slider:,}")
 
 if not results:
     st.info("No results yet. Run `python -m grader` to process candidates.")
 else:
-    leaderboard_df = _build_leaderboard(results, n_slider)
+    leaderboard_df = _build_leaderboard(results, n_slider, metric_choice)
     st.dataframe(
         leaderboard_df,
         use_container_width=True,
@@ -269,11 +336,26 @@ else:
     )
 
 # ---------------------------------------------------------------------------
-# Section 2: Precision@N Chart
+# Section 2: Metric Chart
 # ---------------------------------------------------------------------------
-st.header("Precision@N over N")
 
-valid_results = [r for r in results if r.precision_curve]
+_METRIC_Y_LABEL = {
+    "Precision": "Precision@N",
+    "Gain": "Gain@N (cumulative recall)",
+    "Lift": "Lift@N (× random)",
+    "Qini": "Qini@N",
+}
+
+_METRIC_Y_RANGE = {
+    "Precision": None,   # dynamic
+    "Gain": [0, 1.0],
+    "Lift": None,        # dynamic
+    "Qini": None,        # dynamic — can go negative
+}
+
+st.header(f"{metric_choice}@N over N")
+
+valid_results = [r for r in results if _metric_curve(r, metric_choice)]
 
 if not valid_results:
     st.info("No scored submissions yet.")
@@ -285,10 +367,13 @@ else:
         "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
     ]
 
+    all_y_vals = []
+
     for i, r in enumerate(valid_results):
-        curve = r.precision_curve
+        curve = _metric_curve(r, metric_choice)
         xs = list(range(1, len(curve) + 1))
         color = colors[i % len(colors)]
+        all_y_vals.extend(curve)
 
         fig.add_trace(
             go.Scatter(
@@ -300,7 +385,7 @@ else:
                 hovertemplate=(
                     f"<b>{r.candidate_name}</b><br>"
                     "N=%{x:,}<br>"
-                    "Precision=%{y:.3f}<extra></extra>"
+                    f"{metric_choice}=%{{y:.4f}}<extra></extra>"
                 ),
             )
         )
@@ -318,12 +403,39 @@ else:
             )
 
     if show_baseline:
-        fig.add_hline(
-            y=baseline,
-            line=dict(color="gray", width=1, dash="dash"),
-            annotation_text=f"Random baseline ({baseline:.1%})",
-            annotation_position="bottom right",
-        )
+        total_pop = scorer.total_population if scorer else 10_000
+
+        if metric_choice == "Precision":
+            fig.add_hline(
+                y=baseline,
+                line=dict(color="gray", width=1, dash="dash"),
+                annotation_text=f"Random baseline ({baseline:.1%})",
+                annotation_position="bottom right",
+            )
+        elif metric_choice == "Gain":
+            # Diagonal: gain_random(N) = N / total_population
+            xs_base = list(range(0, total_pop + 1, max(1, total_pop // 200)))
+            ys_base = [x / total_pop for x in xs_base]
+            fig.add_trace(go.Scatter(
+                x=xs_base, y=ys_base,
+                mode="lines", name="Random baseline",
+                line=dict(color="gray", width=1, dash="dash"),
+                hoverinfo="skip",
+            ))
+        elif metric_choice == "Lift":
+            fig.add_hline(
+                y=1.0,
+                line=dict(color="gray", width=1, dash="dash"),
+                annotation_text="Random baseline (lift=1)",
+                annotation_position="bottom right",
+            )
+        elif metric_choice == "Qini":
+            fig.add_hline(
+                y=0.0,
+                line=dict(color="gray", width=1, dash="dash"),
+                annotation_text="Random baseline (qini=0)",
+                annotation_position="bottom right",
+            )
 
     fig.add_vline(
         x=n_slider,
@@ -332,10 +444,23 @@ else:
         annotation_position="top right",
     )
 
+    # Determine y-axis range
+    y_range = _METRIC_Y_RANGE[metric_choice]
+    if y_range is None and all_y_vals:
+        y_min = min(all_y_vals)
+        y_max = max(all_y_vals)
+        pad = (y_max - y_min) * 0.1 or 0.05
+        if metric_choice == "Qini":
+            y_range = [min(y_min - pad, -0.02), y_max + pad]
+        elif metric_choice == "Lift":
+            y_range = [0, y_max * 1.1]
+        else:
+            y_range = [0, max(baseline * 1.5, y_max * 1.1, 0.3)]
+
     fig.update_layout(
         xaxis_title="N (outreach size)",
-        yaxis_title="Precision@N",
-        yaxis=dict(range=[0, max(baseline * 1.5, 0.5)]),
+        yaxis_title=_METRIC_Y_LABEL[metric_choice],
+        yaxis=dict(range=y_range) if y_range else {},
         legend=dict(orientation="v", x=1.02, y=1),
         hovermode="x unified",
         height=450,
@@ -590,7 +715,7 @@ if st.button("Validate", type="secondary"):
         if raw is not None:
             vr = validate_and_standardize(
                 raw,
-                true_member_ids=scorer.true_member_ids,
+                true_member_ids=scorer.true_member_ids if scorer else None,
                 min_overlap=settings.min_member_id_overlap,
             )
 

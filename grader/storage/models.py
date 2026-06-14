@@ -18,19 +18,34 @@ class CandidateResult(BaseModel):
     content_hash: str  # MD5 of CSV bytes — cache key alongside candidate_name
     status: PredictionStatus = PredictionStatus.CSV_DOWNLOAD_ERROR
     precision_curve: Optional[list[float]] = None  # precision@N for N=1..len(predictions)
+    gain_curve: Optional[list[float]] = None       # gain@N = cumulative recall
+    lift_curve: Optional[list[float]] = None       # lift@N = precision@N / churn_rate
+    qini_curve: Optional[list[float]] = None       # qini@N = uplift-aware (requires outreach labels)
     ranked_member_ids: Optional[list] = None       # member_ids sorted by score desc
     ranked_scores: Optional[list] = None           # corresponding scores (same order)
     member_id_overlap: Optional[float] = None
     error: Optional[str] = None   # set on any non-OK status
     notes: Optional[str] = None   # informational (e.g. "Rec. N defaulted to 1,000")
 
-    def precision_at_n(self, n: int) -> Optional[float]:
-        if self.precision_curve is None:
+    def _curve_at_n(self, curve: Optional[list[float]], n: int) -> Optional[float]:
+        if curve is None:
             return None
         idx = n - 1
-        if 0 <= idx < len(self.precision_curve):
-            return self.precision_curve[idx]
+        if 0 <= idx < len(curve):
+            return curve[idx]
         return None
+
+    def precision_at_n(self, n: int) -> Optional[float]:
+        return self._curve_at_n(self.precision_curve, n)
+
+    def gain_at_n(self, n: int) -> Optional[float]:
+        return self._curve_at_n(self.gain_curve, n)
+
+    def lift_at_n(self, n: int) -> Optional[float]:
+        return self._curve_at_n(self.lift_curve, n)
+
+    def qini_at_n(self, n: int) -> Optional[float]:
+        return self._curve_at_n(self.qini_curve, n)
 
     @property
     def precision_at_recommended_n(self) -> Optional[float]:
