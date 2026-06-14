@@ -286,22 +286,26 @@ def _fmt(value, metric: str) -> str:
     return _METRIC_FMT[metric](value)
 
 
-def _build_leaderboard(results: list[CandidateResult], n: int, metric: str) -> pd.DataFrame:
-    fmt = _METRIC_FMT[metric]
+def _build_leaderboard(results: list[CandidateResult], n: int, sort_metric: str) -> pd.DataFrame:
     rows = []
     for r in results:
-        val_n = _metric_at_n(r, metric, n)
         rec_n = _effective_rec_n(r)
-        val_rec = _metric_at_n(r, metric, rec_n) if rec_n is not None else None
+        prec = r.precision_at_n(n)
+        gain = r.gain_at_n(n)
+        lift = r.lift_at_n(n)
+        qini = r.qini_at_n(n)
+        sort_val = _metric_at_n(r, sort_metric, n)
         rows.append(
             {
                 "": _STATUS_ICON.get(r.status, "❓"),
                 "Candidate": r.candidate_name,
-                f"{metric}@{n:,}": _fmt(val_n, metric),
-                "_sort": val_n if val_n is not None else -999,
-                f"{metric}@Rec.N": _fmt(val_rec, metric),
+                f"Precision@{n:,}": _fmt(prec, "Precision"),
+                f"Gain@{n:,}": _fmt(gain, "Gain"),
+                f"Lift@{n:,}": _fmt(lift, "Lift"),
+                f"Qini@{n:,}": _fmt(qini, "Qini"),
                 "Rec. N": rec_n,
                 "Status": _status_label(r),
+                "_sort": sort_val if sort_val is not None else -999,
                 "_status_code": r.status.value,
             }
         )
@@ -318,7 +322,8 @@ def _build_leaderboard(results: list[CandidateResult], n: int, metric: str) -> p
 # ---------------------------------------------------------------------------
 # Section 1: Leaderboard
 # ---------------------------------------------------------------------------
-st.header(f"Leaderboard — {metric_choice} @ N={n_slider:,}")
+st.header(f"Leaderboard @ N={n_slider:,}")
+st.caption(f"Sorted by {metric_choice}. Gain = cumulative recall · Lift = × random · Qini = uplift-aware")
 
 if not results:
     st.info("No results yet. Run `python -m grader` to process candidates.")
