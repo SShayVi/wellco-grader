@@ -95,9 +95,7 @@ with st.sidebar:
     st.title("WellCo Grader")
     st.caption(f"Auto-refreshes every {settings.refresh_interval_seconds}s")
 
-    if scorer is None:
-        st.info("Read-only mode — true labels not available. Run the grader locally to update scores.")
-    elif st.button("Run Grader", type="primary", use_container_width=True):
+    if scorer is not None and st.button("Run Grader", type="primary", use_container_width=True):
         with st.spinner("Fetching candidates and scoring..."):
             try:
                 run_results = run_pipeline(settings)
