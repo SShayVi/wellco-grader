@@ -139,7 +139,7 @@ _STATUS_ICON = {
 }
 
 
-def _effective_rec_n(r: CandidateResult) -> int | None:
+def _effective_rec_n(r: CandidateResult):
     return st.session_state.rec_n_overrides.get(r.candidate_name, r.recommended_n)
 
 
