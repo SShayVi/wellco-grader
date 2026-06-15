@@ -252,28 +252,25 @@ def _at_n(curve: Optional[list], n: int) -> Optional[float]:
     return None
 
 
-def _metric_at_n(r: CandidateResult, metric: str, n: int) -> Optional[float]:
+def _get_curve(r: CandidateResult, metric: str) -> Optional[list]:
+    """Safely retrieve a metric curve from a result, tolerating old cached model versions."""
     if metric == "Precision":
-        return _at_n(r.precision_curve, n)
+        return getattr(r, "precision_curve", None)
     if metric == "Gain":
-        return _at_n(r.gain_curve, n)
+        return getattr(r, "gain_curve", None)
     if metric == "Lift":
-        return _at_n(r.lift_curve, n)
+        return getattr(r, "lift_curve", None)
     if metric == "Qini":
-        return _at_n(r.qini_curve, n)
+        return getattr(r, "qini_curve", None)
     return None
+
+
+def _metric_at_n(r: CandidateResult, metric: str, n: int) -> Optional[float]:
+    return _at_n(_get_curve(r, metric), n)
 
 
 def _metric_curve(r: CandidateResult, metric: str) -> Optional[list[float]]:
-    if metric == "Precision":
-        return r.precision_curve
-    if metric == "Gain":
-        return r.gain_curve
-    if metric == "Lift":
-        return r.lift_curve
-    if metric == "Qini":
-        return r.qini_curve
-    return None
+    return _get_curve(r, metric)
 
 
 def _effective_rec_n(r: CandidateResult):
@@ -300,10 +297,10 @@ def _build_leaderboard(results: list[CandidateResult], n: int, sort_metric: str)
     rows = []
     for r in results:
         rec_n = _effective_rec_n(r)
-        prec = _at_n(r.precision_curve, n)
-        gain = _at_n(r.gain_curve, n)
-        lift = _at_n(r.lift_curve, n)
-        qini = _at_n(r.qini_curve, n)
+        prec = _at_n(getattr(r, "precision_curve", None), n)
+        gain = _at_n(getattr(r, "gain_curve", None), n)
+        lift = _at_n(getattr(r, "lift_curve", None), n)
+        qini = _at_n(getattr(r, "qini_curve", None), n)
         sort_val = _metric_at_n(r, sort_metric, n)
         rows.append(
             {
