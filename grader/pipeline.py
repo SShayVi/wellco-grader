@@ -24,17 +24,21 @@ logger = logging.getLogger(__name__)
 def run_pipeline(
     settings: Settings,
     override_candidates: Optional[List[dict]] = None,
+    scorer: Optional[Scorer] = None,
 ) -> List[CandidateResult]:
     """
     Process all candidates from the Google Sheet (or override_candidates if provided).
 
+    scorer: optional pre-built Scorer (used by the dashboard on Streamlit Cloud where
+            the labels file isn't on disk — the dashboard loads labels from secrets).
     override_candidates: list of {candidate_name, csv_url, recommended_n} dicts.
     Skips candidates whose CSV content hash is already cached.
     """
     _configure_logging(settings.log_level)
 
     cache = ResultCache(settings.cache_db_path)
-    scorer = Scorer(settings.true_labels_path)
+    if scorer is None:
+        scorer = Scorer(settings.true_labels_path)
 
     candidates = override_candidates or fetch_candidates(settings.google_sheet_id)
     if not candidates:

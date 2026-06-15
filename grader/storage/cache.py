@@ -74,6 +74,12 @@ class ResultCache:
             )
         logger.debug("Cached result for %s", result.candidate_name)
 
+    def clear_all(self) -> None:
+        """Delete all cached results (forces full re-grade on next pipeline run)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM candidate_runs")
+        logger.info("Cache cleared")
+
     def get_all_latest(self) -> list[CandidateResult]:
         """Return the most recent result per candidate, ordered by candidate name."""
         with self._connect() as conn:

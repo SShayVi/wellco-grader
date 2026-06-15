@@ -119,19 +119,37 @@ with st.sidebar:
 
     if _scorer_error:
         st.error(_scorer_error)
-    if scorer is not None and st.button("Run Grader", type="primary", use_container_width=True):
-        with st.spinner("Fetching candidates and scoring..."):
-            try:
-                run_results = run_pipeline(settings)
-                get_cache.clear()
-                st.session_state["last_run"] = [
-                    {"name": r.candidate_name, "status": r.status.value, "error": r.error}
-                    for r in run_results
-                ]
-                st.rerun()
-            except Exception as e:
-                st.session_state["last_run"] = [{"name": "—", "status": "PIPELINE_ERROR", "error": str(e)}]
-                st.rerun()
+    if scorer is not None:
+        if st.button("Run Grader", type="primary", use_container_width=True,
+                     help="Score new/changed submissions (cached results are reused)"):
+            with st.spinner("Fetching candidates and scoring..."):
+                try:
+                    run_results = run_pipeline(settings, scorer=scorer)
+                    get_cache.clear()
+                    st.session_state["last_run"] = [
+                        {"name": r.candidate_name, "status": r.status.value, "error": r.error}
+                        for r in run_results
+                    ]
+                    st.rerun()
+                except Exception as e:
+                    st.session_state["last_run"] = [{"name": "—", "status": "PIPELINE_ERROR", "error": str(e)}]
+                    st.rerun()
+
+        if st.button("Re-grade All", type="secondary", use_container_width=True,
+                     help="Clear cache and re-score every candidate from scratch"):
+            with st.spinner("Clearing cache and re-grading all candidates..."):
+                try:
+                    get_cache().clear_all()
+                    run_results = run_pipeline(settings, scorer=scorer)
+                    get_cache.clear()
+                    st.session_state["last_run"] = [
+                        {"name": r.candidate_name, "status": r.status.value, "error": r.error}
+                        for r in run_results
+                    ]
+                    st.rerun()
+                except Exception as e:
+                    st.session_state["last_run"] = [{"name": "—", "status": "PIPELINE_ERROR", "error": str(e)}]
+                    st.rerun()
 
     if "last_run" in st.session_state:
         rows = st.session_state["last_run"]
