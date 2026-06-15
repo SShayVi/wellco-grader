@@ -352,6 +352,11 @@ def _build_leaderboard(results: list[CandidateResult], n: int, sort_metric: str)
         lift = _at_n(getattr(r, "lift_curve", None), n)
         qini = _at_n(getattr(r, "qini_curve", None), n)
         sort_val = _metric_at_n(r, sort_metric, n)
+        # Scores at each candidate's own recommended N
+        prec_rec = _at_n(getattr(r, "precision_curve", None), rec_n) if rec_n else None
+        gain_rec = _at_n(getattr(r, "gain_curve", None), rec_n) if rec_n else None
+        lift_rec = _at_n(getattr(r, "lift_curve", None), rec_n) if rec_n else None
+        qini_rec = _at_n(getattr(r, "qini_curve", None), rec_n) if rec_n else None
         rows.append(
             {
                 "": _STATUS_ICON.get(r.status, "❓"),
@@ -361,6 +366,10 @@ def _build_leaderboard(results: list[CandidateResult], n: int, sort_metric: str)
                 f"Lift@{n:,}": _fmt(lift, "Lift"),
                 f"Qini@{n:,}": _fmt(qini, "Qini"),
                 "Rec. N": rec_n,
+                "Precision@Rec.N": _fmt(prec_rec, "Precision"),
+                "Gain@Rec.N": _fmt(gain_rec, "Gain"),
+                "Lift@Rec.N": _fmt(lift_rec, "Lift"),
+                "Qini@Rec.N": _fmt(qini_rec, "Qini"),
                 "Status": _status_label(r),
                 "_sort": sort_val if sort_val is not None else -999,
                 "_status_code": r.status.value,
