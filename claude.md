@@ -21,7 +21,7 @@ Google Sheet (candidate_name, csv_url, recommended_n)
         ↓
   Scorer  ←── true labels (test_churn_labels.csv)
         ↓
-  Streamlit Dashboard (leaderboard + precision@N chart)
+  Streamlit Dashboard (leaderboard + charts + outreach impact analysis)
 ```
 
 **Pipeline trigger**: Manual CLI (`python -m grader`). Results are written to SQLite.
@@ -37,8 +37,8 @@ wellco-grader/
 │   ├── sources/
 │   │   └── google_sheets.py    # Read sheet via public CSV export URL
 │   ├── scoring/
-│   │   ├── metrics.py          # precision_at_n() + TODO: uplift-aware metrics
-│   │   └── scorer.py           # Joins predictions + true labels → precision curve
+│   │   ├── metrics.py          # precision_curve, gain_curve, lift_curve, qini_curve (all O(N))
+│   │   └── scorer.py           # Joins predictions + true labels → all metric curves
 │   ├── storage/
 │   │   ├── cache.py            # SQLite read/write keyed by (candidate, content_hash)
 │   │   └── models.py           # Pydantic: CandidateResult, PredictionStatus
@@ -238,6 +238,21 @@ toggle, valid-only filter, summary metrics.
 - URL text input + Validate button.
 - Runs `validate_and_standardize` and shows per-issue callouts (ERROR = red, WARNING = orange, INFO = blue).
 - Shows a preview of the standardised output on success.
+
+**Section 5 — Outreach Impact Analysis**
+- **Outreach effectiveness stats** (4 metric tiles): control churn rate, outreached churn rate,
+  absolute effect, relative reduction. Computed inline from `scorer._labels_df`.
+  Callout when effect is not statistically significant (z-test, p-value via `math.erfc`).
+  Test-set result: control=20.2%, treated=19.7%, effect=0.48 pp, z=0.58, p=0.56 (not significant).
+  This explains near-zero Qini scores.
+- **Targeting Value chart** (stacked bar at slider N): gray base = churners expected from random
+  outreach, green top = extra churners found by each model vs random. Shows discriminative value
+  even when outreach has no effect.
+- **Simulated Savings** (adjustable slider): "Outreach effectiveness" slider (0–50%, default = measured
+  relative reduction ~2.4%). Shows estimated additional churns prevented per candidate vs random
+  targeting. Auto-generated summary line names the best candidate and their estimated total saves.
+- All stats computed defensively with `getattr(scorer, '_labels_df', None)` — section is hidden if
+  scorer lacks the `outreach` column.
 
 **Auto-refresh**: polls SQLite every 60 seconds.
 
