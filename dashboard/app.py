@@ -71,7 +71,7 @@ def get_scorer():
             tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
             tmp.write(raw)
             tmp.close()
-            scorer = Scorer(tmp.name)
+            scorer = Scorer(Path(tmp.name))
             os.unlink(tmp.name)
             return scorer, None
     except Exception as e:
@@ -86,7 +86,7 @@ def get_scorer():
             )
             tmp.write(csv_text)
             tmp.close()
-            scorer = Scorer(tmp.name)
+            scorer = Scorer(Path(tmp.name))
             os.unlink(tmp.name)
             return scorer, None
     except Exception as e:
