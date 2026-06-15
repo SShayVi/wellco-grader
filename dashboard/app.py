@@ -242,15 +242,25 @@ _METRIC_FMT = {
 }
 
 
+def _at_n(curve: Optional[list], n: int) -> Optional[float]:
+    """Read index n-1 from a curve list; returns None if unavailable."""
+    if curve is None:
+        return None
+    idx = n - 1
+    if 0 <= idx < len(curve):
+        return curve[idx]
+    return None
+
+
 def _metric_at_n(r: CandidateResult, metric: str, n: int) -> Optional[float]:
     if metric == "Precision":
-        return r.precision_at_n(n)
+        return _at_n(r.precision_curve, n)
     if metric == "Gain":
-        return r.gain_at_n(n)
+        return _at_n(r.gain_curve, n)
     if metric == "Lift":
-        return r.lift_at_n(n)
+        return _at_n(r.lift_curve, n)
     if metric == "Qini":
-        return r.qini_at_n(n)
+        return _at_n(r.qini_curve, n)
     return None
 
 
@@ -290,10 +300,10 @@ def _build_leaderboard(results: list[CandidateResult], n: int, sort_metric: str)
     rows = []
     for r in results:
         rec_n = _effective_rec_n(r)
-        prec = r.precision_at_n(n)
-        gain = r.gain_at_n(n)
-        lift = r.lift_at_n(n)
-        qini = r.qini_at_n(n)
+        prec = _at_n(r.precision_curve, n)
+        gain = _at_n(r.gain_curve, n)
+        lift = _at_n(r.lift_curve, n)
+        qini = _at_n(r.qini_curve, n)
         sort_val = _metric_at_n(r, sort_metric, n)
         rows.append(
             {
