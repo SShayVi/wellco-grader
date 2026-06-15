@@ -194,10 +194,16 @@ qini@N = (treated_churners_in_topN / N_T) - (control_churners_in_topN / N_C)
 
 - `grader/scoring/metrics.py` — `precision_curve`, `gain_curve`, `lift_curve`, `qini_curve` (all O(N))
 - `grader/scoring/scorer.py` — `Scorer.score_all(df)` returns `{precision, gain, lift, qini}` dicts;
-  `Scorer.fill_curves(result)` backfills missing curves on old cached results (gain/lift derived
-  analytically from precision_curve; qini recomputed from ranked_member_ids)
+  `Scorer.fill_curves(result)` backfills missing curves locally; `_qini_data` pre-computed at init
 - `grader/storage/models.py` — `CandidateResult` stores all four curves;
   `precision_at_n`, `gain_at_n`, `lift_at_n`, `qini_at_n` helper methods
+- `grader/storage/cache.py` — `ResultCache.clear_all()` deletes all rows (used by Re-grade All)
+- `grader/pipeline.py` — `run_pipeline(settings, scorer=None)` accepts a pre-built scorer so the
+  dashboard on Streamlit Cloud can pass its already-loaded scorer instead of re-reading the labels file
+
+**Dashboard backfill** (for cached results without the new curves): done inline in `app.py` using
+`getattr(scorer, '_churn_rate', ...)` etc. — avoids calling new scorer methods that may not exist
+on older Python bytecache versions on Streamlit Cloud.
 
 ---
 
@@ -207,9 +213,10 @@ qini@N = (treated_churners_in_topN / N_T) - (control_churners_in_topN / N_C)
 toggle, valid-only filter, summary metrics.
 
 **Section 1 — Leaderboard**
-- Columns: status icon | Candidate | `{metric}@{N}` (slider) | `{metric}@Rec.N` | Rec. N | Status
-- Sorted by selected metric@N descending. Updates live on slider or metric change.
-- Metric display formats: Precision (3 dp) · Gain (%) · Lift (×) · Qini (4 dp).
+- Columns: status icon | Candidate | Precision@N | Gain@N | Lift@N | Qini@N | Rec. N | Status
+- All four metrics shown simultaneously at the current slider N.
+- Sorted by the metric selected in the sidebar. Metric formats: Precision (3 dp) · Gain (%) · Lift (×) · Qini (4 dp).
+- All field access uses `getattr(r, 'field', None)` to tolerate old cached model versions.
 
 **Section 2 — Metric Chart**
 - Title and Y-axis update to match the selected metric.
@@ -218,7 +225,7 @@ toggle, valid-only filter, summary metrics.
 - Random baseline: precision → horizontal at churn_rate; gain → diagonal N/total_pop;
   lift → horizontal at 1.0; qini → horizontal at 0.
 - Current slider N shown as a solid black vertical line.
-- Old cached results (missing gain/lift/qini) are filled in automatically via `scorer.fill_curves()`.
+- Old cached results (missing gain/lift/qini) are filled in automatically via inline backfill in `app.py`.
 
 **Section 3 — Candidate Overlap**
 - Multiselect to choose which candidates to compare.
@@ -233,6 +240,17 @@ toggle, valid-only filter, summary metrics.
 - Shows a preview of the standardised output on success.
 
 **Auto-refresh**: polls SQLite every 60 seconds.
+
+**Sidebar grading buttons** (visible only when scorer is loaded):
+- **Run Grader** — fetches Google Sheet, skips candidates already in cache (fast, incremental)
+- **Re-grade All** — clears the entire cache first, then re-scores everyone from scratch (use after
+  schema changes or to force new metrics onto existing candidates)
+
+**Scorer loading on Streamlit Cloud**: `get_scorer()` tries (1) local `data/test_churn_labels.csv`,
+then (2) secret `TRUE_LABELS_CSV_B64` (base64-encoded CSV), then (3) secret `TRUE_LABELS_CSV` (raw text).
+Generate the secret with: `base64 -i data/test_churn_labels.csv | tr -d '\n' | pbcopy`
+A "Retry loading scorer" button appears when the scorer fails, clearing the `@st.cache_resource`
+so the secret is re-read without a full redeploy.
 
 **Deployment**:
 - Dev: `streamlit run dashboard/app.py`
