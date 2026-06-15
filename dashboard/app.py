@@ -465,7 +465,7 @@ else:
             )
 
     if show_baseline:
-        total_pop = scorer.total_population if scorer else 10_000
+        total_pop = getattr(scorer, 'total_population', None) or len(getattr(scorer, '_labels_df', None) or range(10_000))
 
         if metric_choice == "Precision":
             fig.add_hline(
