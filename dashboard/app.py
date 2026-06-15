@@ -42,6 +42,14 @@ st.set_page_config(
 # Auto-refresh
 # ---------------------------------------------------------------------------
 settings = Settings()
+# On Streamlit Cloud, GOOGLE_SHEET_ID may not be in env vars — fall back to st.secrets.
+if not settings.google_sheet_id:
+    try:
+        _sid = st.secrets.get("GOOGLE_SHEET_ID")
+        if _sid:
+            settings.google_sheet_id = _sid
+    except Exception:
+        pass
 st_autorefresh(interval=settings.refresh_interval_seconds * 1000, key="autorefresh")
 
 # ---------------------------------------------------------------------------
@@ -187,7 +195,18 @@ with st.sidebar:
         rows = st.session_state["last_run"]
         n_ok = sum(1 for r in rows if r["status"] == "OK")
         n_total = len(rows)
-        st.caption(f"Last run: {n_ok}/{n_total} OK — see leaderboard for details")
+        if n_total == 0:
+            st.warning("Last run: no candidates found — check GOOGLE_SHEET_ID secret.")
+        elif n_ok == n_total:
+            st.success(f"Last run: {n_ok}/{n_total} OK")
+        else:
+            st.warning(f"Last run: {n_ok}/{n_total} OK")
+        with st.expander("Run details"):
+            for row in rows:
+                icon = "✅" if row["status"] == "OK" else "❌"
+                st.write(f"{icon} **{row['name']}** — {row['status']}")
+                if row.get("error"):
+                    st.caption(row["error"])
 
     st.divider()
 
