@@ -106,9 +106,36 @@ scorer, _scorer_error = get_scorer()
 baseline = scorer.baseline_precision if scorer else _DEFAULT_BASELINE
 
 # Fill in gain/lift/qini curves for results cached before these metrics existed.
+# Done inline here to avoid calling new scorer methods that may not exist on
+# older cached scorer versions on Streamlit Cloud.
 if scorer:
+    _churn_rate = getattr(scorer, '_churn_rate', _DEFAULT_BASELINE)
+    _churner_ids = getattr(scorer, '_true_churner_ids', set())
+    _total_churners = len(_churner_ids) or int(_DEFAULT_BASELINE * 10_000)
+    _qini_data = getattr(scorer, '_qini_data', None)
+
     for r in results:
-        scorer.fill_curves(r)
+        _prec = getattr(r, 'precision_curve', None)
+        if _prec is None:
+            continue
+        _n = len(_prec)
+        try:
+            if getattr(r, 'gain_curve', None) is None:
+                r.gain_curve = [_prec[i] * (i + 1) / _total_churners for i in range(_n)]
+        except Exception:
+            pass
+        try:
+            if getattr(r, 'lift_curve', None) is None and _churn_rate > 0:
+                r.lift_curve = [p / _churn_rate for p in _prec]
+        except Exception:
+            pass
+        try:
+            from grader.scoring.metrics import qini_curve as _qc
+            _ids = getattr(r, 'ranked_member_ids', None)
+            if getattr(r, 'qini_curve', None) is None and _qini_data and _ids:
+                r.qini_curve = _qc(_ids, *_qini_data)
+        except Exception:
+            pass
 
 # ---------------------------------------------------------------------------
 # Sidebar
