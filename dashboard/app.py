@@ -119,6 +119,11 @@ with st.sidebar:
 
     if _scorer_error:
         st.error(_scorer_error)
+    elif scorer is None:
+        st.warning("Scorer not loaded — add `TRUE_LABELS_CSV_B64` to Streamlit secrets to enable grading.")
+        if st.button("Retry loading scorer", use_container_width=True):
+            get_scorer.clear()
+            st.rerun()
     if scorer is not None:
         if st.button("Run Grader", type="primary", use_container_width=True,
                      help="Score new/changed submissions (cached results are reused)"):
