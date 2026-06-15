@@ -777,6 +777,220 @@ else:
             st.plotly_chart(fig_dist, use_container_width=True)
 
 # ---------------------------------------------------------------------------
+# Section 5: Outreach Impact Analysis
+# ---------------------------------------------------------------------------
+st.header("Outreach Impact Analysis")
+st.caption(
+    "How effective was the outreach in the test period, and what value does model-driven targeting provide?"
+)
+
+_labels_df_raw = getattr(scorer, '_labels_df', None) if scorer else None
+
+if _labels_df_raw is None or 'outreach' not in _labels_df_raw.columns:
+    st.info("Outreach data not available — scorer must be loaded from labels file with an `outreach` column.")
+else:
+    import math as _math
+
+    _ctrl = _labels_df_raw[_labels_df_raw['outreach'] == 0]
+    _trt  = _labels_df_raw[_labels_df_raw['outreach'] == 1]
+    _p_c  = float(_ctrl['churn'].mean())
+    _p_t  = float(_trt['churn'].mean())
+    _n_c, _n_t = len(_ctrl), len(_trt)
+    _abs_eff = _p_c - _p_t
+    _rel_eff = _abs_eff / _p_c if _p_c > 0 else 0.0
+    _se = _math.sqrt(_p_c*(1-_p_c)/_n_c + _p_t*(1-_p_t)/_n_t)
+    _z  = _abs_eff / _se if _se > 0 else 0.0
+    _p_val = 2 * 0.5 * _math.erfc(abs(_z) / _math.sqrt(2))
+
+    # --- Outreach effectiveness stats ---
+    _col1, _col2, _col3, _col4 = st.columns(4)
+    _col1.metric("Control group churn", f"{_p_c:.1%}",
+                 help=f"Churn rate among the {_n_c:,} non-outreached members")
+    _col2.metric("Outreached group churn", f"{_p_t:.1%}",
+                 help=f"Churn rate among the {_n_t:,} outreached members")
+    _col3.metric("Absolute effect", f"{_abs_eff:+.2%}",
+                 help="Reduction in churn rate from outreach (positive = outreach helped)")
+    _col4.metric("Relative reduction", f"{_rel_eff:.1%}",
+                 help=f"z={_z:.2f}, p={_p_val:.3f}")
+
+    if _p_val >= 0.05:
+        st.warning(
+            f"**Outreach effect is not statistically significant** (z={_z:.2f}, p={_p_val:.2f}). "
+            "The ~0.5 pp churn reduction is likely noise. "
+            "This is why Qini scores are near zero — the metric requires measurable outreach lift to show signal. "
+            "The candidates' models are still evaluated fairly on their ability to identify churners (Precision, Gain, Lift)."
+        )
+    else:
+        st.success(
+            f"Outreach is statistically significant (z={_z:.2f}, p={_p_val:.3f}). "
+            f"Outreach reduced churn by ~{_abs_eff:.2%} in absolute terms."
+        )
+
+    st.divider()
+
+    # --- Targeting value: extra churners found vs random ---
+    _ok_scored_impact = [r for r in results
+                         if r.status in (PredictionStatus.OK, PredictionStatus.DEGENERATE_PREDICTIONS)
+                         and getattr(r, 'precision_curve', None)]
+
+    if _ok_scored_impact:
+        st.subheader(f"Targeting Value @ N={n_slider:,}")
+        st.caption(
+            "Each model's top-N contains more churners than a random selection of N. "
+            "This chart shows how many **additional churners** each model identifies versus random outreach."
+        )
+
+        _base = getattr(scorer, '_churn_rate', _DEFAULT_BASELINE)
+        _random_churners_at_n = _base * n_slider
+
+        _impact_rows = []
+        for r in _ok_scored_impact:
+            _prec = _at_n(getattr(r, 'precision_curve', None), n_slider)
+            if _prec is None:
+                continue
+            _extra = (_prec - _base) * n_slider
+            _impact_rows.append({
+                "Candidate": r.candidate_name,
+                "Precision@N": _prec,
+                "Churners in top-N (model)": _prec * n_slider,
+                "Churners in top-N (random)": _random_churners_at_n,
+                "Extra churners found": _extra,
+            })
+
+        if _impact_rows:
+            _idf = sorted(_impact_rows, key=lambda x: x["Extra churners found"], reverse=True)
+            _names_i = [r["Candidate"] for r in _idf]
+            _extra_vals = [r["Extra churners found"] for r in _idf]
+            _model_vals = [r["Churners in top-N (model)"] for r in _idf]
+
+            _fig_impact = go.Figure()
+            # Random baseline bar (base layer)
+            _fig_impact.add_trace(go.Bar(
+                x=_names_i,
+                y=[_random_churners_at_n] * len(_idf),
+                name=f"Random baseline ({_base:.1%})",
+                marker_color="lightgray",
+                hovertemplate="Random: %{y:.0f} churners<extra></extra>",
+            ))
+            # Extra churners on top
+            _fig_impact.add_trace(go.Bar(
+                x=_names_i,
+                y=[max(0, v) for v in _extra_vals],
+                name="Extra churners found",
+                marker_color="#2ca02c",
+                base=[_random_churners_at_n] * len(_idf),
+                hovertemplate="Extra churners: %{y:.0f}<br>Total model: %{customdata:.0f}<extra></extra>",
+                customdata=_model_vals,
+            ))
+            _fig_impact.update_layout(
+                barmode="stack",
+                xaxis_title="Candidate",
+                yaxis_title=f"Churners in top-{n_slider:,}",
+                legend=dict(orientation="h", y=1.1),
+                height=380,
+                margin=dict(l=60, r=40, t=60, b=60),
+            )
+            st.plotly_chart(_fig_impact, use_container_width=True)
+
+            # Summary table
+            _sum_df = pd.DataFrame([{
+                "Candidate": r["Candidate"],
+                f"Precision@{n_slider:,}": f"{r['Precision@N']:.1%}",
+                "Churners (model)": f"{r['Churners in top-N (model)']:.0f}",
+                "Churners (random)": f"{_random_churners_at_n:.0f}",
+                "Extra churners found": f"{r['Extra churners found']:+.0f}",
+            } for r in _idf])
+            with st.expander("Show targeting value table"):
+                st.dataframe(_sum_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # --- Simulated savings ---
+        st.subheader("Simulated Churn Prevention")
+        st.caption(
+            "If outreach were effective, better targeting would prevent more churn. "
+            "Use the slider to explore what would happen at different outreach effectiveness levels. "
+            f"The test data measured **{_rel_eff:.1%} relative reduction** (not statistically significant)."
+        )
+
+        _default_save_rate = max(0.1, round(_rel_eff * 100, 1))
+        _save_rate_pct = st.slider(
+            "Outreach effectiveness — % of contacted churners saved",
+            min_value=0.0,
+            max_value=50.0,
+            value=_default_save_rate,
+            step=0.5,
+            format="%.1f%%",
+            help=(
+                "How many of the churners you contact are actually saved by outreach? "
+                "Measured from test data: ~2.4% (not significant). "
+                "Move the slider to explore optimistic scenarios."
+            ),
+            key="save_rate_slider",
+        )
+        _save_rate = _save_rate_pct / 100.0
+
+        if _impact_rows:
+            _sim_rows = []
+            _random_saves = _random_churners_at_n * _save_rate
+            for r in _idf:
+                _model_saves = r["Churners in top-N (model)"] * _save_rate
+                _extra_saves = _model_saves - _random_saves
+                _sim_rows.append({
+                    "Candidate": r["Candidate"],
+                    "Saves (random outreach)": _random_saves,
+                    "Saves (model targeting)": _model_saves,
+                    "Extra saves vs random": _extra_saves,
+                })
+
+            _snames = [r["Candidate"] for r in _sim_rows]
+            _extra_saves_vals = [r["Extra saves vs random"] for r in _sim_rows]
+
+            _fig_sim = go.Figure()
+            _fig_sim.add_trace(go.Bar(
+                x=_snames,
+                y=[_random_saves] * len(_sim_rows),
+                name="Saves from random outreach",
+                marker_color="lightgray",
+                hovertemplate=f"Random outreach saves: {_random_saves:.1f}<extra></extra>",
+            ))
+            _fig_sim.add_trace(go.Bar(
+                x=_snames,
+                y=[max(0, v) for v in _extra_saves_vals],
+                name="Additional saves from model targeting",
+                marker_color="#9467bd",
+                base=[_random_saves] * len(_sim_rows),
+                hovertemplate="Additional saves: %{y:.1f}<extra></extra>",
+            ))
+            _fig_sim.update_layout(
+                barmode="stack",
+                xaxis_title="Candidate",
+                yaxis_title=f"Estimated churns prevented (N={n_slider:,})",
+                legend=dict(orientation="h", y=1.1),
+                height=380,
+                margin=dict(l=60, r=40, t=60, b=60),
+                annotations=[dict(
+                    x=0.5, y=-0.22, xref="paper", yref="paper",
+                    text=f"Assumes {_save_rate_pct:.1f}% of contacted churners are saved by outreach",
+                    showarrow=False, font=dict(size=11, color="gray"),
+                )],
+            )
+            st.plotly_chart(_fig_sim, use_container_width=True)
+
+            if _save_rate_pct < 1.0:
+                st.info(
+                    "At near-zero effectiveness the difference is negligible — "
+                    "try raising the slider to see what better outreach would mean for each model."
+                )
+            else:
+                best = _sim_rows[0]
+                st.success(
+                    f"At {_save_rate_pct:.1f}% outreach effectiveness with N={n_slider:,}: "
+                    f"**{best['Candidate']}** would prevent **{best['Saves (model targeting)']:.0f} churns** "
+                    f"({best['Extra saves vs random']:+.1f} vs random outreach)."
+                )
+
+# ---------------------------------------------------------------------------
 # Section 4: Validate a Submission
 # ---------------------------------------------------------------------------
 st.header("Validate a Submission")
