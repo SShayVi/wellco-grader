@@ -742,7 +742,7 @@ else:
         yaxis_title=_METRIC_Y_LABEL[metric_choice],
         yaxis=dict(range=y_range) if y_range else {},
         legend=dict(orientation="v", x=1.02, y=1),
-        hovermode="x unified",
+        hovermode="closest",
         height=450,
         margin=dict(l=40, r=200, t=40, b=40),
     )
