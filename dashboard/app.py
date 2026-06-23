@@ -155,6 +155,127 @@ if scorer:
             pass
 
 # ---------------------------------------------------------------------------
+# Metric descriptions — defined before sidebar so the selector can reference them.
+# ---------------------------------------------------------------------------
+_ATE = getattr(scorer, 'overall_ate', 0.0048) if scorer else 0.0048
+
+_METRIC_INFO = {
+    "Uplift": {
+        "goal": "🎯 PRIMARY — persuadable targeting",
+        "ds_name": "Conditional Average Treatment Effect (CATE@N)",
+        "layman": (
+            "Among the N members this model recommends, does outreach reduce churn "
+            "more than it does for a random group? "
+            "Compares the churn rate of non-outreached vs outreached members "
+            "**within the model's top picks**."
+        ),
+        "formula": "uplift@N = (control_churn_rate in top-N) − (treated_churn_rate in top-N)",
+        "formula_expanded": (
+            "= (churners among control in top-N / control members in top-N)\n"
+            "− (churners among treated in top-N / treated members in top-N)"
+        ),
+        "example": (
+            "Uplift@1000 = **+0.030** → within the model's top 1,000: "
+            "23.0% of non-outreached members churned vs 20.0% of outreached members — "
+            "a 3pp gap. Since the overall population gap is only ~0.48pp, "
+            "this model's targets respond ~6× better to outreach than average."
+        ),
+        "baseline": f"Overall ATE ≈ {_ATE:.4f} ({_ATE*100:.2f}pp) — not zero",
+        "range": "Typically −0.05 to +0.20; max ≈ 0.20",
+        "interpretation": "Higher = better. Above baseline = model finds members who respond to outreach.",
+    },
+    "Qini": {
+        "goal": "🎯 PRIMARY — persuadable targeting",
+        "ds_name": "Qini coefficient at depth N (Radcliffe & Surry, 2011)",
+        "layman": (
+            "Does the model rank members who **need** outreach (would churn *without* it) "
+            "above members who churn **regardless** of outreach? "
+            "Control churners = people we can save; "
+            "treated churners = lost causes we can't help."
+        ),
+        "formula": "qini@N = (control_churners in top-N / N_C) − (treated_churners in top-N / N_T)",
+        "formula_expanded": (
+            "N_C = 6,111 total control members; N_T = 3,889 total treated members\n"
+            "control_churners = outreach=0 AND churn=1 (1,236 total)\n"
+            "treated_churners = outreach=1 AND churn=1 (768 total)"
+        ),
+        "example": (
+            "Qini@1000 = **0.050** → the model put proportionally 5pp more of all control "
+            "churners into the top-1000 than treated churners. "
+            "E.g. ~61 control churners and ~8 treated churners in the top-1000, "
+            "vs ~20 of each expected under random selection. "
+            "The model is preferring 'saveable' members over 'lost causes'."
+        ),
+        "baseline": "0.0 (random model)",
+        "range": "0 to ≈ 0.16; negative = model counter-productive",
+        "interpretation": "Higher = better. Positive = model prioritises persuadables over lost causes.",
+    },
+    "Precision": {
+        "goal": "📊 SECONDARY — churn identification",
+        "ds_name": "Positive Predictive Value (PPV) at depth N",
+        "layman": (
+            "Of the N members you outreach, how many would actually have churned? "
+            "This is the 'hit rate' — what fraction of your outreach budget "
+            "is spent on real churners."
+        ),
+        "formula": "precision@N = |top-N ∩ true_churners| / N",
+        "formula_expanded": "Number of actual churners in the model's top-N, divided by N.",
+        "example": (
+            "Precision@1000 = **0.350** → 350 of the 1,000 outreached members will churn. "
+            "A random selection of 1,000 would only hit ~200 churners (20% baseline). "
+            "This model finds 150 extra churners within the same outreach budget."
+        ),
+        "baseline": f"Churn rate ≈ {baseline:.1%} (random outreach)",
+        "range": "0.0 to 1.0; 1.0 = every recommendation is a churner",
+        "interpretation": "Higher = better. Shows targeting efficiency for churn identification.",
+    },
+    "Gain": {
+        "goal": "📊 SECONDARY — churn identification",
+        "ds_name": "Cumulative Recall (Sensitivity) at depth N",
+        "layman": (
+            "What percentage of **all** churners has the model captured in its top-N picks? "
+            "Answers 'how much of the at-risk population have we covered?' — "
+            "useful when you care about not missing churners."
+        ),
+        "formula": "gain@N = |top-N ∩ true_churners| / total_churners",
+        "formula_expanded": (
+            "Number of actual churners in top-N, divided by all 2,004 churners in the dataset."
+        ),
+        "example": (
+            "Gain@1000 = **0.500** → the top-1,000 contains 1,002 of the 2,004 total churners (50%). "
+            "A random selection of 1,000 would only include ~10% of churners (1,000/10,000). "
+            "The model captures 5× more of the at-risk population."
+        ),
+        "baseline": "Diagonal line: N / 10,000 (random model captures N/total fraction)",
+        "range": "0.0 to 1.0; reaches 1.0 once top-N covers all churners",
+        "interpretation": "Higher = better. Shows coverage of the full churner population.",
+    },
+    "Lift": {
+        "goal": "📊 SECONDARY — churn identification",
+        "ds_name": "Lift statistic at depth N",
+        "layman": (
+            "How many times more efficient than randomly picking members to outreach? "
+            "Lift 2.0 means you need **half the outreach budget** to reach the same "
+            "number of churners compared to random selection."
+        ),
+        "formula": "lift@N = precision@N / overall_churn_rate",
+        "formula_expanded": (
+            f"= (churners in top-N / N) / {baseline:.4f}\n"
+            "Normalises precision by the baseline churn rate; 1.0 = same as random."
+        ),
+        "example": (
+            "Lift@1000 = **2.0** → the model reaches 350 churners per 1,000 slots (35% precision) "
+            "vs 200 churners with random outreach (20%). "
+            "To reach 350 churners randomly, you'd need 1,750 outreach slots — "
+            "this model achieves the same coverage with 1,000."
+        ),
+        "baseline": "1.0 (random model)",
+        "range": f"0 to ≈ {1/baseline:.1f}× (= 1/churn_rate); below 1.0 = worse than random",
+        "interpretation": "Higher = better. Values below 1.0 mean the model hurts targeting.",
+    },
+}
+
+# ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -258,15 +379,24 @@ with st.sidebar:
         "Leaderboard & chart metric",
         options=["Uplift", "Qini", "Precision", "Gain", "Lift"],
         index=0,
-        help=(
-            "Uplift@N — PRIMARY: conditional treatment effect within top-N (persuadable targeting)\n"
-            "Qini@N — PRIMARY: cumulative uplift (persuadable targeting)\n"
-            "Precision@N — SECONDARY: fraction of top-N that are churners\n"
-            "Gain@N — SECONDARY: fraction of all churners captured in top-N\n"
-            "Lift@N — SECONDARY: how many times better than random at finding churners"
-        ),
     )
 
+    # Inline metric explanation — updates when the selector changes
+    _info = _METRIC_INFO.get(metric_choice, {})
+    if _info:
+        _ate_live = getattr(scorer, 'overall_ate', _ATE) if scorer else _ATE
+        _baseline_str = _info["baseline"].replace("0.0048", f"{_ate_live:.4f}")
+        st.markdown(
+            f"**{_info['goal']}**  \n"
+            f"*{_info['ds_name']}*\n\n"
+            f"{_info['layman']}\n\n"
+            f"**Formula:** `{_info['formula']}`\n\n"
+            f"**Example:** {_info['example']}\n\n"
+            f"**Random baseline:** {_baseline_str}  \n"
+            f"**Range:** {_info['range']}"
+        )
+
+    st.divider()
     show_baseline = st.checkbox("Show random baseline", value=True)
     show_only_ok = st.checkbox("Show only valid submissions", value=False)
 
@@ -291,44 +421,23 @@ with st.sidebar:
 
     st.divider()
 
-    with st.expander("📊 Metrics Guide"):
-        st.markdown(
-            "**Primary goal: persuadable targeting** — find members who *would* churn "
-            "without outreach but are *saved* by it.\n\n"
-            "---\n"
-            "**Uplift@N** *(primary)*\n"
-            "Formula: `churn_rate_control_in_topN − churn_rate_treated_in_topN`\n"
-            "What: conditional treatment effect within the model's top-N. "
-            "Measures whether the members this model recommends respond better to outreach "
-            "than a random sample.\n"
-            f"Random baseline ≈ overall ATE ({getattr(scorer, 'overall_ate', 0.0048):.3f} ≈ 0.48pp). "
-            "Max ≈ 0.20. Above baseline = model finds persuadables.\n\n"
-            "---\n"
-            "**Qini@N** *(primary)*\n"
-            "Formula: `control_churners_in_topN / N_C − treated_churners_in_topN / N_T`\n"
-            "What: cumulative uplift. Measures whether the model surfaces "
-            "control churners (persuadables — churn WITHOUT outreach) "
-            "proportionally faster than treated churners (lost causes — churn DESPITE outreach).\n"
-            "Random baseline = 0. Max ≈ 0.16.\n\n"
-            "---\n"
-            "**Precision@N** *(secondary)*\n"
-            "Formula: `|top-N ∩ churners| / N`\n"
-            "What: fraction of the model's N recommendations that are actual churners. "
-            "Measures churn identification quality.\n"
-            f"Random baseline = churn rate ({baseline:.1%}). Range: 0–1.\n\n"
-            "---\n"
-            "**Gain@N** *(secondary)*\n"
-            "Formula: `|top-N ∩ churners| / total_churners`\n"
-            "What: fraction of ALL churners captured in the top-N (cumulative recall). "
-            "Useful for asking 'what share of at-risk members have we covered?'\n"
-            "Random baseline = diagonal N/10,000. Range: 0–1.\n\n"
-            "---\n"
-            "**Lift@N** *(secondary)*\n"
-            "Formula: `precision@N / overall_churn_rate`\n"
-            "What: how many times more efficient than random outreach at finding churners. "
-            "Lift 2.0 = twice as many churners reached per outreach slot vs random.\n"
-            "Random baseline = 1.0."
-        )
+    with st.expander("📊 Full Metrics Reference"):
+        _ate_live = getattr(scorer, 'overall_ate', _ATE) if scorer else _ATE
+        for _mname in ["Uplift", "Qini", "Precision", "Gain", "Lift"]:
+            _mi = _METRIC_INFO[_mname]
+            _bline = _mi["baseline"].replace("0.0048", f"{_ate_live:.4f}")
+            st.markdown(
+                f"#### {_mname}@N — {_mi['goal']}\n"
+                f"**Technical name:** {_mi['ds_name']}\n\n"
+                f"**In plain terms:** {_mi['layman']}\n\n"
+                f"**Formula:** `{_mi['formula']}`\n\n"
+                f"```\n{_mi['formula_expanded']}\n```\n\n"
+                f"**Numeric example:** {_mi['example']}\n\n"
+                f"**Random baseline:** {_bline}  \n"
+                f"**Range:** {_mi['range']}  \n"
+                f"**Interpretation:** {_mi['interpretation']}\n\n"
+                "---"
+            )
 
     st.divider()
     st.metric("Total candidates", len(results))
@@ -510,6 +619,13 @@ _METRIC_Y_RANGE = {
 }
 
 st.header(f"{metric_choice}@N over N")
+_chart_info = _METRIC_INFO.get(metric_choice, {})
+if _chart_info:
+    st.caption(
+        f"{_chart_info['goal']} · "
+        f"Formula: `{_chart_info['formula']}` · "
+        f"Baseline: {_chart_info['baseline']}"
+    )
 
 valid_results = [r for r in results if _metric_curve(r, metric_choice)]
 
