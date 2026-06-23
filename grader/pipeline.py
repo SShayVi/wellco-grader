@@ -138,6 +138,7 @@ def _process_candidate(
         gain_curve=curves.get("gain"),
         lift_curve=curves.get("lift"),
         qini_curve=curves.get("qini"),
+        uplift_curve=curves.get("uplift"),
         ranked_member_ids=ranked_ids,
         ranked_scores=ranked_scores, member_id_overlap=vr.overlap_pct,
         notes=notes,

@@ -6,6 +6,12 @@ Automated evaluation system for the WellCo Data Science home assignment.
 Reads candidates from a Google Sheet (name + CSV link + recommended N), scores their
 predictions against true churn labels, and serves a live leaderboard dashboard.
 
+**Evaluation goals (in priority order):**
+1. **Primary** — persuadable member targeting: find members who *would* churn without outreach
+   but are *saved* by it. Measured by Uplift@N and Qini@N.
+2. **Secondary** — churn identification: find members most likely to churn regardless of outreach.
+   Measured by Precision@N, Gain@N, Lift@N.
+
 ---
 
 ## High-Level Flow
@@ -181,22 +187,36 @@ lift@N = precision@N / churn_rate
 ```
 How many times better than a random ranker. Random baseline: 1.0 (constant).
 
-### qini@N (uplift-aware)
+### qini@N (cumulative uplift — primary)
 ```
-qini@N = (treated_churners_in_topN / N_T) - (control_churners_in_topN / N_C)
+qini@N = (control_churners_in_topN / N_C) - (treated_churners_in_topN / N_T)
 ```
 - `treated` = `outreach == 1`; `control` = `outreach == 0`; `N_T`, `N_C` = total treatment/control sizes.
-- Positive ⟹ model surfaces treated churners disproportionately vs. control churners.
-- Random baseline: 0.0 (constant).
+- Positive ⟹ model surfaces *control* churners (persuadables — churn WITHOUT outreach)
+  disproportionately vs *treated* churners (lost causes — churn DESPITE outreach).
+- Random baseline: 0.0 (constant). Max ≈ 0.16 for this dataset.
+- Requires `outreach` column in `test_churn_labels.csv`.
+
+### uplift@N (conditional treatment effect — primary)
+```
+uplift@N = (control_churners_in_topN / n_control_in_topN)
+         - (treated_churners_in_topN / n_treated_in_topN)
+```
+- Uses *local* counts within top-N as denominators (vs Qini which uses global N_T/N_C).
+- Interpretation: within the model's top-N, the control group's churn rate exceeds the
+  treated group's churn rate by uplift@N — how much more does outreach reduce churn for
+  the members this model recommends vs. the baseline?
+- Random baseline ≈ overall ATE ≈ 0.0048 (not zero). Max ≈ 0.20.
 - Requires `outreach` column in `test_churn_labels.csv`.
 
 ### Implementation
 
-- `grader/scoring/metrics.py` — `precision_curve`, `gain_curve`, `lift_curve`, `qini_curve` (all O(N))
-- `grader/scoring/scorer.py` — `Scorer.score_all(df)` returns `{precision, gain, lift, qini}` dicts;
-  `Scorer.fill_curves(result)` backfills missing curves locally; `_qini_data` pre-computed at init
-- `grader/storage/models.py` — `CandidateResult` stores all four curves;
-  `precision_at_n`, `gain_at_n`, `lift_at_n`, `qini_at_n` helper methods
+- `grader/scoring/metrics.py` — `precision_curve`, `gain_curve`, `lift_curve`, `qini_curve`, `uplift_curve` (all O(N))
+- `grader/scoring/scorer.py` — `Scorer.score_all(df)` returns `{precision, gain, lift, qini, uplift}` dicts;
+  `Scorer.fill_curves(result)` backfills missing curves; `_qini_data`, `_uplift_data` pre-computed at init;
+  `overall_ate` property = control_churn_rate − treated_churn_rate
+- `grader/storage/models.py` — `CandidateResult` stores all five curves;
+  `precision_at_n`, `gain_at_n`, `lift_at_n`, `qini_at_n`, `uplift_at_n` helper methods
 - `grader/storage/cache.py` — `ResultCache.clear_all()` deletes all rows (used by Re-grade All)
 - `grader/pipeline.py` — `run_pipeline(settings, scorer=None)` accepts a pre-built scorer so the
   dashboard on Streamlit Cloud can pass its already-loaded scorer instead of re-reading the labels file
@@ -209,23 +229,24 @@ on older Python bytecache versions on Streamlit Cloud.
 
 ## Dashboard (`dashboard/app.py`)
 
-**Sidebar**: N slider (1–10,000), metric selector (Precision / Gain / Lift / Qini), baseline
-toggle, valid-only filter, summary metrics.
+**Sidebar**: N slider (1–10,000), metric selector (Uplift / Qini / Precision / Gain / Lift — default Uplift),
+baseline toggle, valid-only filter, **Metrics Guide** expander (formula + interpretation for each metric),
+summary metrics.
 
 **Section 1 — Leaderboard**
-- Columns: status icon | Candidate | Precision@N | Gain@N | Lift@N | Qini@N | Rec. N | Status
-- All four metrics shown simultaneously at the current slider N.
-- Sorted by the metric selected in the sidebar. Metric formats: Precision (3 dp) · Gain (%) · Lift (×) · Qini (4 dp).
+- Columns: status icon | Candidate | Uplift@N | Qini@N | Precision@N | Gain@N | Lift@N | Rec. N | (same 5 @Rec.N) | Status
+- All five metrics shown simultaneously at the current slider N AND at each candidate's Rec. N.
+- Sorted by the metric selected in the sidebar (default: Uplift). Formats: Uplift (±4 dp) · Qini (4 dp) · Precision (3 dp) · Gain (%) · Lift (×).
 - All field access uses `getattr(r, 'field', None)` to tolerate old cached model versions.
 
 **Section 2 — Metric Chart**
 - Title and Y-axis update to match the selected metric.
 - One line per candidate. X = N, Y = selected metric value.
 - Dotted vertical line at each candidate's recommended N.
-- Random baseline: precision → horizontal at churn_rate; gain → diagonal N/total_pop;
-  lift → horizontal at 1.0; qini → horizontal at 0.
+- Random baseline: uplift → horizontal at overall_ate (~0.0048); qini → horizontal at 0;
+  precision → horizontal at churn_rate; gain → diagonal N/total_pop; lift → horizontal at 1.0.
 - Current slider N shown as a solid black vertical line.
-- Old cached results (missing gain/lift/qini) are filled in automatically via inline backfill in `app.py`.
+- Old cached results (missing uplift/qini/gain/lift) are filled in automatically via inline backfill in `app.py`.
 
 **Section 3 — Candidate Overlap**
 - Multiselect to choose which candidates to compare.

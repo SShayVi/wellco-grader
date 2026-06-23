@@ -5,8 +5,10 @@ Metrics (all computed as curves — one value per N from 1 to len(predictions)):
   precision@N  = |top_N ∩ churners| / N
   gain@N       = |top_N ∩ churners| / total_churners   (cumulative recall)
   lift@N       = precision@N / churn_rate              (relative to random)
-  qini@N       = treated_churners_in_topN/N_T - control_churners_in_topN/N_C
-                 (uplift-aware; requires outreach labels)
+  qini@N       = control_churners_in_topN/N_C - treated_churners_in_topN/N_T
+                 (cumulative uplift; requires outreach labels; baseline 0)
+  uplift@N     = churn_rate_control_in_topN - churn_rate_treated_in_topN
+                 (conditional treatment effect; requires outreach labels; baseline ≈ ATE)
 """
 from typing import Optional
 
@@ -114,14 +116,14 @@ def qini_curve(
     n_control: int,
 ) -> list[float]:
     """
-    Qini@N for every N: uplift-aware metric using outreach labels.
+    Qini@N for every N: cumulative uplift metric using outreach labels.
 
-    qini@N = treated_churners_in_topN / N_T - control_churners_in_topN / N_C
+    qini@N = control_churners_in_topN / N_C - treated_churners_in_topN / N_T
 
-    where treated = outreach=1 and control = outreach=0.
-    A positive value means the model disproportionately surfaces treated churners
-    (members who churned despite being outreached, i.e., high-risk regardless of
-    intervention).  Random baseline: 0.0.
+    where treated = outreach=1, control = outreach=0.
+    Positive = model surfaces control churners (persuadables — those who churn
+    WITHOUT outreach) disproportionately vs treated churners (lost causes — those
+    who churn DESPITE outreach).  Random baseline: 0.0.  Max ≈ 0.16 for this dataset.
     """
     if not ranked_member_ids or n_treated == 0 or n_control == 0:
         return []
@@ -134,5 +136,49 @@ def qini_curve(
             hits_t += 1
         elif member_id in control_churner_ids:
             hits_c += 1
-        curve.append(hits_t / n_treated - hits_c / n_control)
+        curve.append(hits_c / n_control - hits_t / n_treated)
+    return curve
+
+
+def uplift_curve(
+    ranked_member_ids: list[int],
+    treated_member_ids: set[int],
+    treated_churner_ids: set[int],
+    control_churner_ids: set[int],
+) -> list[float]:
+    """
+    Uplift@N for every N: conditional average treatment effect within top-N.
+
+    uplift@N = churn_rate_control_in_topN - churn_rate_treated_in_topN
+             = (control_churners_in_topN / n_control_in_topN)
+             - (treated_churners_in_topN / n_treated_in_topN)
+
+    Uses local counts within top-N as denominators (vs Qini which uses global N_T/N_C).
+    Interpretation: within the model's top-N, the control group's churn rate exceeds
+    the treated group's churn rate by uplift@N — i.e., outreach reduces churn by that
+    amount for the members this model recommends.
+    Random baseline ≈ overall ATE (≈ 0.0048 in this dataset, not zero).
+    Returns 0.0 until at least one member from each group appears in top-N.
+    """
+    if not ranked_member_ids:
+        return []
+
+    n_t = 0
+    n_c = 0
+    hits_t = 0
+    hits_c = 0
+    curve: list[float] = []
+    for member_id in ranked_member_ids:
+        if member_id in treated_member_ids:
+            n_t += 1
+            if member_id in treated_churner_ids:
+                hits_t += 1
+        else:
+            n_c += 1
+            if member_id in control_churner_ids:
+                hits_c += 1
+        if n_t > 0 and n_c > 0:
+            curve.append(hits_c / n_c - hits_t / n_t)
+        else:
+            curve.append(0.0)
     return curve

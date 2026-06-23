@@ -12,6 +12,7 @@ from grader.scoring.metrics import (
     lift_curve,
     precision_curve,
     qini_curve,
+    uplift_curve,
     random_baseline_precision,
 )
 
@@ -39,6 +40,7 @@ class Scorer:
         )
         self._churn_rate = len(self._true_churner_ids) / len(self._labels_df)
         self._qini_data = self._build_qini_data()
+        self._uplift_data = self._build_uplift_data()
         logger.info(
             "Scorer loaded: %d members, %d churners (%.1f%%)",
             len(self._labels_df),
@@ -69,6 +71,16 @@ class Scorer:
     @property
     def baseline_precision(self) -> float:
         return random_baseline_precision(self._churn_rate)
+
+    @property
+    def overall_ate(self) -> float:
+        """Average treatment effect: control_churn_rate − treated_churn_rate."""
+        if "outreach" not in self._labels_df.columns:
+            return 0.0
+        df = self._labels_df
+        p_c = df.loc[df["outreach"] == 0, "churn"].mean()
+        p_t = df.loc[df["outreach"] == 1, "churn"].mean()
+        return float(p_c - p_t)
 
     # ------------------------------------------------------------------
     # Scoring
@@ -117,6 +129,11 @@ class Scorer:
                 if self._qini_data
                 else []
             ),
+            "uplift": (
+                uplift_curve(ranked_ids, *self._uplift_data)
+                if self._uplift_data
+                else []
+            ),
         }
         return curves
 
@@ -145,6 +162,9 @@ class Scorer:
         if result.qini_curve is None and result.ranked_member_ids and self._qini_data:
             result.qini_curve = qini_curve(result.ranked_member_ids, *self._qini_data)
 
+        if result.uplift_curve is None and result.ranked_member_ids and self._uplift_data:
+            result.uplift_curve = uplift_curve(result.ranked_member_ids, *self._uplift_data)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -163,6 +183,22 @@ class Scorer:
         n_treated = int((df["outreach"] == 1).sum())
         n_control = int((df["outreach"] == 0).sum())
         return treated_churners, control_churners, n_treated, n_control
+
+    def _build_uplift_data(self):
+        """Pre-compute lookup sets needed for uplift_curve(). Returns None if no outreach column."""
+        if "outreach" not in self._labels_df.columns:
+            return None
+        df = self._labels_df
+        treated_members = set(
+            df.loc[df["outreach"] == 1, "member_id"].astype(int)
+        )
+        treated_churners = set(
+            df.loc[(df["outreach"] == 1) & (df["churn"] == 1), "member_id"].astype(int)
+        )
+        control_churners = set(
+            df.loc[(df["outreach"] == 0) & (df["churn"] == 1), "member_id"].astype(int)
+        )
+        return treated_members, treated_churners, control_churners
 
     @staticmethod
     def _load_labels(path: Path) -> pd.DataFrame:

@@ -20,7 +20,8 @@ class CandidateResult(BaseModel):
     precision_curve: Optional[list[float]] = None  # precision@N for N=1..len(predictions)
     gain_curve: Optional[list[float]] = None       # gain@N = cumulative recall
     lift_curve: Optional[list[float]] = None       # lift@N = precision@N / churn_rate
-    qini_curve: Optional[list[float]] = None       # qini@N = uplift-aware (requires outreach labels)
+    qini_curve: Optional[list[float]] = None        # qini@N = cumulative uplift (requires outreach labels)
+    uplift_curve: Optional[list[float]] = None      # uplift@N = conditional treatment effect (requires outreach labels)
     ranked_member_ids: Optional[list] = None       # member_ids sorted by score desc
     ranked_scores: Optional[list] = None           # corresponding scores (same order)
     member_id_overlap: Optional[float] = None
@@ -46,6 +47,9 @@ class CandidateResult(BaseModel):
 
     def qini_at_n(self, n: int) -> Optional[float]:
         return self._curve_at_n(self.qini_curve, n)
+
+    def uplift_at_n(self, n: int) -> Optional[float]:
+        return self._curve_at_n(self.uplift_curve, n)
 
     @property
     def precision_at_recommended_n(self) -> Optional[float]:

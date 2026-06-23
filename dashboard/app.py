@@ -122,6 +122,8 @@ if scorer:
     _total_churners = len(_churner_ids) or int(_DEFAULT_BASELINE * 10_000)
     _qini_data = getattr(scorer, '_qini_data', None)
 
+    _uplift_data = getattr(scorer, '_uplift_data', None)
+
     for r in results:
         _prec = getattr(r, 'precision_curve', None)
         if _prec is None:
@@ -142,6 +144,13 @@ if scorer:
             _ids = getattr(r, 'ranked_member_ids', None)
             if getattr(r, 'qini_curve', None) is None and _qini_data and _ids:
                 r.qini_curve = _qc(_ids, *_qini_data)
+        except Exception:
+            pass
+        try:
+            from grader.scoring.metrics import uplift_curve as _uc
+            _ids = getattr(r, 'ranked_member_ids', None)
+            if getattr(r, 'uplift_curve', None) is None and _uplift_data and _ids:
+                r.uplift_curve = _uc(_ids, *_uplift_data)
         except Exception:
             pass
 
@@ -247,13 +256,14 @@ with st.sidebar:
 
     metric_choice = st.selectbox(
         "Leaderboard & chart metric",
-        options=["Precision", "Gain", "Lift", "Qini"],
+        options=["Uplift", "Qini", "Precision", "Gain", "Lift"],
         index=0,
         help=(
-            "Precision@N — fraction of top-N that are churners\n"
-            "Gain@N — fraction of all churners captured in top-N\n"
-            "Lift@N — how many times better than random\n"
-            "Qini@N — uplift-aware (outreach-adjusted)"
+            "Uplift@N — PRIMARY: conditional treatment effect within top-N (persuadable targeting)\n"
+            "Qini@N — PRIMARY: cumulative uplift (persuadable targeting)\n"
+            "Precision@N — SECONDARY: fraction of top-N that are churners\n"
+            "Gain@N — SECONDARY: fraction of all churners captured in top-N\n"
+            "Lift@N — SECONDARY: how many times better than random at finding churners"
         ),
     )
 
@@ -280,6 +290,47 @@ with st.sidebar:
             )
 
     st.divider()
+
+    with st.expander("📊 Metrics Guide"):
+        st.markdown(
+            "**Primary goal: persuadable targeting** — find members who *would* churn "
+            "without outreach but are *saved* by it.\n\n"
+            "---\n"
+            "**Uplift@N** *(primary)*\n"
+            "Formula: `churn_rate_control_in_topN − churn_rate_treated_in_topN`\n"
+            "What: conditional treatment effect within the model's top-N. "
+            "Measures whether the members this model recommends respond better to outreach "
+            "than a random sample.\n"
+            f"Random baseline ≈ overall ATE ({getattr(scorer, 'overall_ate', 0.0048):.3f} ≈ 0.48pp). "
+            "Max ≈ 0.20. Above baseline = model finds persuadables.\n\n"
+            "---\n"
+            "**Qini@N** *(primary)*\n"
+            "Formula: `control_churners_in_topN / N_C − treated_churners_in_topN / N_T`\n"
+            "What: cumulative uplift. Measures whether the model surfaces "
+            "control churners (persuadables — churn WITHOUT outreach) "
+            "proportionally faster than treated churners (lost causes — churn DESPITE outreach).\n"
+            "Random baseline = 0. Max ≈ 0.16.\n\n"
+            "---\n"
+            "**Precision@N** *(secondary)*\n"
+            "Formula: `|top-N ∩ churners| / N`\n"
+            "What: fraction of the model's N recommendations that are actual churners. "
+            "Measures churn identification quality.\n"
+            f"Random baseline = churn rate ({baseline:.1%}). Range: 0–1.\n\n"
+            "---\n"
+            "**Gain@N** *(secondary)*\n"
+            "Formula: `|top-N ∩ churners| / total_churners`\n"
+            "What: fraction of ALL churners captured in the top-N (cumulative recall). "
+            "Useful for asking 'what share of at-risk members have we covered?'\n"
+            "Random baseline = diagonal N/10,000. Range: 0–1.\n\n"
+            "---\n"
+            "**Lift@N** *(secondary)*\n"
+            "Formula: `precision@N / overall_churn_rate`\n"
+            "What: how many times more efficient than random outreach at finding churners. "
+            "Lift 2.0 = twice as many churners reached per outreach slot vs random.\n"
+            "Random baseline = 1.0."
+        )
+
+    st.divider()
     st.metric("Total candidates", len(results))
     ok_count = sum(1 for r in results if r.status == PredictionStatus.OK)
     st.metric("Valid submissions", ok_count)
@@ -301,6 +352,7 @@ _METRIC_LABELS = {
     "Gain": "Gain",
     "Lift": "Lift",
     "Qini": "Qini",
+    "Uplift": "Uplift",
 }
 
 _METRIC_FMT = {
@@ -308,6 +360,7 @@ _METRIC_FMT = {
     "Gain": lambda v: f"{v:.1%}",
     "Lift": lambda v: f"{v:.2f}x",
     "Qini": lambda v: f"{v:.4f}",
+    "Uplift": lambda v: f"{v:+.4f}",
 }
 
 
@@ -331,6 +384,8 @@ def _get_curve(r: CandidateResult, metric: str) -> Optional[list]:
         return getattr(r, "lift_curve", None)
     if metric == "Qini":
         return getattr(r, "qini_curve", None)
+    if metric == "Uplift":
+        return getattr(r, "uplift_curve", None)
     return None
 
 
@@ -366,29 +421,33 @@ def _build_leaderboard(results: list[CandidateResult], n: int, sort_metric: str)
     rows = []
     for r in results:
         rec_n = _effective_rec_n(r)
-        prec = _at_n(getattr(r, "precision_curve", None), n)
-        gain = _at_n(getattr(r, "gain_curve", None), n)
-        lift = _at_n(getattr(r, "lift_curve", None), n)
-        qini = _at_n(getattr(r, "qini_curve", None), n)
+        prec   = _at_n(getattr(r, "precision_curve", None), n)
+        gain   = _at_n(getattr(r, "gain_curve", None), n)
+        lift   = _at_n(getattr(r, "lift_curve", None), n)
+        qini   = _at_n(getattr(r, "qini_curve", None), n)
+        uplift = _at_n(getattr(r, "uplift_curve", None), n)
         sort_val = _metric_at_n(r, sort_metric, n)
         # Scores at each candidate's own recommended N
-        prec_rec = _at_n(getattr(r, "precision_curve", None), rec_n) if rec_n else None
-        gain_rec = _at_n(getattr(r, "gain_curve", None), rec_n) if rec_n else None
-        lift_rec = _at_n(getattr(r, "lift_curve", None), rec_n) if rec_n else None
-        qini_rec = _at_n(getattr(r, "qini_curve", None), rec_n) if rec_n else None
+        prec_rec   = _at_n(getattr(r, "precision_curve", None), rec_n) if rec_n else None
+        gain_rec   = _at_n(getattr(r, "gain_curve", None), rec_n) if rec_n else None
+        lift_rec   = _at_n(getattr(r, "lift_curve", None), rec_n) if rec_n else None
+        qini_rec   = _at_n(getattr(r, "qini_curve", None), rec_n) if rec_n else None
+        uplift_rec = _at_n(getattr(r, "uplift_curve", None), rec_n) if rec_n else None
         rows.append(
             {
                 "": _STATUS_ICON.get(r.status, "❓"),
                 "Candidate": r.candidate_name,
+                f"Uplift@{n:,}": _fmt(uplift, "Uplift"),
+                f"Qini@{n:,}": _fmt(qini, "Qini"),
                 f"Precision@{n:,}": _fmt(prec, "Precision"),
                 f"Gain@{n:,}": _fmt(gain, "Gain"),
                 f"Lift@{n:,}": _fmt(lift, "Lift"),
-                f"Qini@{n:,}": _fmt(qini, "Qini"),
                 "Rec. N": rec_n,
+                "Uplift@Rec.N": _fmt(uplift_rec, "Uplift"),
+                "Qini@Rec.N": _fmt(qini_rec, "Qini"),
                 "Precision@Rec.N": _fmt(prec_rec, "Precision"),
                 "Gain@Rec.N": _fmt(gain_rec, "Gain"),
                 "Lift@Rec.N": _fmt(lift_rec, "Lift"),
-                "Qini@Rec.N": _fmt(qini_rec, "Qini"),
                 "Status": _status_label(r),
                 "_sort": sort_val if sort_val is not None else -999,
                 "_status_code": r.status.value,
@@ -408,7 +467,12 @@ def _build_leaderboard(results: list[CandidateResult], n: int, sort_metric: str)
 # Section 1: Leaderboard
 # ---------------------------------------------------------------------------
 st.header(f"Leaderboard @ N={n_slider:,}")
-st.caption(f"Sorted by {metric_choice}. Gain = cumulative recall · Lift = × random · Qini = uplift-aware")
+st.caption(
+    f"Sorted by {metric_choice}. "
+    "**Uplift** = conditional treatment effect (primary) · "
+    "**Qini** = cumulative uplift (primary) · "
+    "**Precision** = churner hit rate · **Gain** = cumulative recall · **Lift** = × random"
+)
 
 if not results:
     st.info("No results yet. Run `python -m grader` to process candidates.")
@@ -433,7 +497,8 @@ _METRIC_Y_LABEL = {
     "Precision": "Precision@N",
     "Gain": "Gain@N (cumulative recall)",
     "Lift": "Lift@N (× random)",
-    "Qini": "Qini@N",
+    "Qini": "Qini@N (cumulative uplift)",
+    "Uplift": "Uplift@N (control − treated churn rate)",
 }
 
 _METRIC_Y_RANGE = {
@@ -441,6 +506,7 @@ _METRIC_Y_RANGE = {
     "Gain": [0, 1.0],
     "Lift": None,        # dynamic
     "Qini": None,        # dynamic — can go negative
+    "Uplift": None,      # dynamic
 }
 
 st.header(f"{metric_choice}@N over N")
@@ -526,6 +592,14 @@ else:
                 annotation_text="Random baseline (qini=0)",
                 annotation_position="bottom right",
             )
+        elif metric_choice == "Uplift":
+            _ate = getattr(scorer, 'overall_ate', 0.0048) if scorer else 0.0048
+            fig.add_hline(
+                y=_ate,
+                line=dict(color="gray", width=1, dash="dash"),
+                annotation_text=f"Random baseline (ATE ≈ {_ate:.3f})",
+                annotation_position="bottom right",
+            )
 
     fig.add_vline(
         x=n_slider,
@@ -540,7 +614,7 @@ else:
         y_min = min(all_y_vals)
         y_max = max(all_y_vals)
         pad = (y_max - y_min) * 0.1 or 0.05
-        if metric_choice == "Qini":
+        if metric_choice in ("Qini", "Uplift"):
             y_range = [min(y_min - pad, -0.02), y_max + pad]
         elif metric_choice == "Lift":
             y_range = [0, y_max * 1.1]
