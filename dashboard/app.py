@@ -109,8 +109,29 @@ def load_results() -> list[CandidateResult]:
 
 _DEFAULT_BASELINE = 0.2004  # 2004 churners / 10000 members
 
-results = load_results()
 scorer, _scorer_error = get_scorer()
+
+# ---------------------------------------------------------------------------
+# Auto-grade on startup — runs once per process lifetime (i.e. after each
+# Streamlit Cloud restart).  Uses a mutable dict in cache_resource so the flag
+# survives across page re-runs within the same process but resets on restart.
+# Fast when candidates are already in the committed DB (cache hit); only
+# re-downloads CSVs for candidates added since the last git push.
+# ---------------------------------------------------------------------------
+@st.cache_resource
+def _startup_graded():
+    return {"done": False}
+
+_startup = _startup_graded()
+if not _startup["done"] and scorer is not None and settings.google_sheet_id:
+    _startup["done"] = True
+    with st.spinner("Syncing candidate results…"):
+        try:
+            run_pipeline(settings, scorer=scorer)
+        except Exception:
+            pass
+
+results = load_results()
 baseline = scorer.baseline_precision if scorer else _DEFAULT_BASELINE
 
 # Fill in gain/lift/qini curves for results cached before these metrics existed.
