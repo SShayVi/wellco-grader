@@ -14,7 +14,7 @@ from typing import Optional
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+import time as _time
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -50,7 +50,16 @@ if not settings.google_sheet_id:
             settings.google_sheet_id = _sid
     except Exception:
         pass
-st_autorefresh(interval=settings.refresh_interval_seconds * 1000, key="autorefresh")
+if "last_auto_rerun_time" not in st.session_state:
+    st.session_state.last_auto_rerun_time = _time.time()
+
+@st.fragment(run_every=settings.refresh_interval_seconds)
+def _auto_refresh():
+    if _time.time() - st.session_state.last_auto_rerun_time >= settings.refresh_interval_seconds * 0.8:
+        st.session_state.last_auto_rerun_time = _time.time()
+        st.rerun()
+
+_auto_refresh()
 
 # ---------------------------------------------------------------------------
 # Load data
